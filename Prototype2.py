@@ -4,6 +4,9 @@ import h5py
 import numpy as np
 from pathlib import Path
 from abc import ABC, abstractmethod
+import pandas as pd
+from st_aggrid import AgGrid, GridOptionsBuilder
+from typing import Any
 
 class GUI(ABC):
     @abstractmethod
@@ -101,6 +104,8 @@ class StreamlitGUI(GUI):
             else:
                 st.write("No .nxs files found in directory")
 
+
+
     def display_data_overview(self, df: pl.DataFrame):
         st.write("### Data Overview")
         
@@ -116,24 +121,158 @@ class StreamlitGUI(GUI):
         # Move the filename column to the front
         df = df.select(["filename"] + [col for col in df.columns if col != "filename"])
         
-        # Calculate dynamic height based on the number of rows
-        # Set a base height of 100 pixels and add 35 pixels per row (with a small buffer)
-        dynamic_height = max(50, 35 * df.height + 35)  # Added 20 pixels as a buffer
-            
-        # Display the DataFrame with enhanced features
-        st.dataframe(
-            df.to_pandas(),  # Convert to Pandas for better Streamlit integration
-            use_container_width=True,
-            height=dynamic_height,  # Dynamically adjust height based on the number of rows
-            column_config={
-                col: st.column_config.Column(
-                    help=f"Column: {col}",
-                    width="medium"
-                )
-                for col in df.columns
-            }
+        # Convert Polars DataFrame to Pandas
+        df_pd = df.to_pandas()
+
+        # Identify 2D data columns
+        two_d_columns = self._get_2d_columns(df)
+        st.write("2D Columns:", two_d_columns)
+
+        # Identify columns containing NumPy arrays
+        ndarray_columns = [col for col in df_pd.columns if isinstance(df_pd[col].iloc[0], np.ndarray)]
+        
+        # Function to truncate NumPy arrays for display
+        def truncate_array(x: Any, max_elements: int = 5) -> str:
+            """Convert numpy array to a truncated string representation while preserving full data for tooltips."""
+            if isinstance(x, np.ndarray):
+                return f"[{', '.join(map(str, x[:max_elements]))}, ...]"  # Show first `max_elements` elements only
+            return str(x)
+
+        # Store full values separately for tooltips
+        full_values = {col: df_pd[col].astype(str) for col in ndarray_columns}
+
+        # Apply transformation to each NumPy array column
+        for col in ndarray_columns:
+            df_pd[col + "_tooltip"] = df_pd[col].astype(str)  # Store full values in a separate column for tooltips
+            df_pd[col] = df_pd[col].apply(truncate_array)  # Apply truncation for display
+
+        # **Set up AgGrid configuration**
+        gb = GridOptionsBuilder.from_dataframe(df_pd)
+
+        # Set column widths and tooltips
+        for col in df_pd.columns:
+            if col in two_d_columns:
+                gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=150)
+            elif col == "filename":
+                gb.configure_column(col, width=250)
+            elif col in ndarray_columns:
+                gb.configure_column(col, width=180, tooltipField=col + "_tooltip")  # Add tooltip field
+            else:
+                gb.configure_column(col, width=120)
+        
+        # Allow manual resizing
+        gb.configure_grid_options(domLayout="normal", tooltipShowDelay=0)  # Enable tooltips instantly
+        gb.configure_default_column(resizable=True)
+
+        # Build grid options
+        grid_options = gb.build()
+
+        # **Display using AgGrid**
+        grid_response = AgGrid(
+            df_pd,
+            gridOptions=grid_options,
+            fit_columns_on_grid_load=False,
+            enable_enterprise_modules=False,
+            height=500,
+            allow_unsafe_jscode=True,  # Required for tooltips
         )
 
+
+        
+    def highlight_2d_cols(s):
+        return ['background-color: yellow' if s.name in two_d_columns else '' for _ in s]
+
+    
+    def _style_2d_columns(self, df_pd: pd.DataFrame, two_d_columns: list[str]) -> pd.DataFrame:
+        """
+        Apply background colour to 2D data columns using Pandas Styler.
+        """
+        def highlight_2d_cols(s):
+            return ['background-color: yellow' if s.name in two_d_columns else '' for _ in s]
+
+        return df_pd.style.apply(self.highlight_2d_cols, axis=0)
+        
+
+    def highlight_2d_columns(self, df: pd.DataFrame, two_d_columns: list[str]) -> pd.DataFrame:
+        """
+        Apply background color to columns containing 2D data.
+        """
+        # Create a style DataFrame with the same shape as the original DataFrame
+        style = df.style
+        
+        # Apply background color to 2D columns
+        for col in two_d_columns:
+            style = style.apply(lambda x: ['background-color: yellow' if x.name == col else '' for i in x], axis=0)
+        
+        return style
+
+    def _get_2d_columns(self, df: pl.DataFrame) -> list[str]:
+        """Identify columns containing 2D data."""
+        return [
+            col for col in df.columns 
+            if df[col].dtype == pl.List and 
+            any(isinstance(row, list) and any(isinstance(i, list) for i in row) for row in df[col].to_list())
+        ]
+
+    def _get_column_config(self, df: pl.DataFrame) -> dict:
+        """Generate column configuration for the DataFrame."""
+        column_config = {}
+        for col in df.columns:
+            if df[col].dtype in (pl.Int64, pl.Float64):  # Numerical columns
+                column_config[col] = self._get_number_column_config(col, df[col].dtype)
+            elif df[col].dtype == pl.List:  # List columns
+                column_config[col] = self._get_list_column_config(col, df[col])
+            else:  # Text or other columns
+                column_config[col] = self._get_text_column_config(col, df[col])
+        return column_config
+
+    def _get_number_column_config(self, col: str, dtype: pl.DataType) -> st.column_config.Column:
+        """Generate configuration for numerical columns."""
+        return st.column_config.NumberColumn(
+            help=f"Column: {col}",
+            width="medium",
+            format="%d" if dtype == pl.Int64 else "%.2f"  # Format integers or floats
+        )
+
+    def _get_list_column_config(self, col: str, series: pl.Series) -> st.column_config.Column:
+        """Generate configuration for list columns."""
+        # Convert lists to strings using map_elements
+        string_series = series.map_elements(lambda x: str(x), return_dtype=pl.String)  # Convert each list to its string representation
+        max_length = string_series.str.len_chars().max()  # Calculate the maximum length
+        column_width = min(max_length * 8 + 20, 300)  # Add a buffer (e.g., 20 pixels)
+        return st.column_config.Column(
+            help=f"Column: {col}",
+            width=column_width  # Set dynamic width based on content
+        )
+
+    def _get_text_column_config(self, col: str, series: pl.Series) -> st.column_config.Column:
+        """Generate configuration for text or other columns."""
+        if series.dtype == pl.Utf8:  # String column
+            max_length = series.str.len_chars().max()
+        else:  # Non-string column (e.g., boolean, dates)
+            max_length = series.cast(pl.Utf8).str.len_chars().max()
+        column_width = min(max_length * 8 + 20, 300)  # Add a buffer (e.g., 20 pixels)
+        return st.column_config.Column(
+            help=f"Column: {col}",
+            width=column_width  # Set dynamic width based on content
+        )
+
+    def _inject_custom_css(self):
+        """Inject custom CSS to fix numerical values display."""
+        st.markdown(
+            """
+            <style>
+            .stDataFrame .stNumber {
+                background-color: transparent !important;
+                border: none !important;
+                padding: 0 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+    
+                                       
     def show_message(self, message):
         st.write(message)
 
