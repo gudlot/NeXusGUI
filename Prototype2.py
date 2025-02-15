@@ -168,26 +168,25 @@ class StreamlitGUI(GUI):
             df_pd[col] = df_pd[col].apply(truncate_array)  
 
         # **Assign tooltips efficiently using pd.concat() to avoid fragmentation**
-        tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
-        
-
-        df_pd = pd.concat([df_pd, tooltip_df], axis=1)
+        #tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
+        #df_pd = pd.concat([df_pd, tooltip_df], axis=1)
 
         # **Set up AgGrid configuration**
         gb = GridOptionsBuilder.from_dataframe(df_pd)
 
-        # Configure columns
+        # Configure columns without explicit tooltipField (forces grey tooltips)
         for col in df_pd.columns:
-            if col in ndarray_columns:
-                gb.configure_column(col, width=180, tooltipField=col + "_tooltip")  # Add tooltips
-            elif col in two_d_columns:
-                gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=200, tooltipField=col + "_tooltip")
+            if col in two_d_columns:
+                gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=120)
             else:
-                gb.configure_column(col, width=120)
+                gb.configure_column(col, width=120)  # Set a reasonable width to trigger default tooltips
 
-        # Allow manual resizing and enable tooltips
-        gb.configure_grid_options(domLayout="normal", tooltipShowDelay=0)  
-        gb.configure_default_column(resizable=True)
+        # Ensure grey tooltips appear correctly
+        gb.configure_grid_options(suppressCellBrowserTooltip=False)  
+        gb.configure_grid_options(domLayout="normal", tooltipShowDelay=0)
+
+        # Enable column resizing and auto height
+        gb.configure_default_column(resizable=True, wrapText=False, autoHeight=False)  # **Auto height ensures tooltips trigger**
 
         # Build grid options
         grid_options = gb.build()
