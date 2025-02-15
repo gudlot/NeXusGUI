@@ -169,6 +169,8 @@ class StreamlitGUI(GUI):
 
         # **Assign tooltips efficiently using pd.concat() to avoid fragmentation**
         tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
+        
+
         df_pd = pd.concat([df_pd, tooltip_df], axis=1)
 
         # **Set up AgGrid configuration**
