@@ -104,8 +104,6 @@ class StreamlitGUI(GUI):
             else:
                 st.write("No .nxs files found in directory")
 
-
-
     def display_data_overview(self, df: pl.DataFrame):
         st.write("### Data Overview")
 
@@ -132,44 +130,40 @@ class StreamlitGUI(GUI):
         ndarray_columns = [col for col in df_pd.columns if isinstance(df_pd[col].iloc[0], np.ndarray)]
 
         def truncate_array(x: Any, max_elements: int = 5) -> str:
-            """Convert NumPy array to a truncated string representation while preserving full data for tooltips."""
+            """Ensure formatted values are long enough to trigger tooltips."""
             if isinstance(x, np.ndarray):
                 if x.ndim == 1:
-                    return f"[{', '.join(map(str, x[:max_elements]))}, ...]"  # 1D array truncation
+                    truncated = f"[{', '.join(map(str, x[:max_elements]))}, ...]"
+                    return truncated if len(truncated) > 20 else truncated + " " * 20  # Ensure overflow
                 elif x.ndim == 2:
-                    return f"[{', '.join(map(str, x[0, :max_elements]))}, ...]"  # Show only first row, truncated
-            return str(x)
+                    rows, cols = x.shape
+                    truncated = f"[{', '.join(map(str, x[0, :max_elements]))}, ...]"
+                    return truncated if len(truncated) > 20 else truncated + " " * 20  # Ensure overflow
+            return str(x) if len(str(x)) > 20 else str(x) + " " * 20  # Force overflow
 
         def format_2d_array_for_tooltip(x: Any, max_rows: int = 3, max_cols: int = 5) -> str:
-            """Format 2D NumPy arrays as multi-line tooltips for better readability."""
             if isinstance(x, np.ndarray) and x.ndim == 2:
                 rows, cols = x.shape
-                max_rows = min(rows, max_rows)  # Limit rows displayed
-                max_cols = min(cols, max_cols)  # Limit columns displayed
-                
                 formatted_rows = []
-                for i in range(max_rows):
-                    row_str = ", ".join(map(str, x[i, :max_cols]))  # Truncate columns
+                for i in range(min(rows, max_rows)):
+                    row_str = ", ".join(map(str, x[i, :min(cols, max_cols)]))
                     formatted_rows.append(f"[{row_str}, ...]" if cols > max_cols else f"[{row_str}]")
-                
                 if rows > max_rows:
-                    formatted_rows.append("[...]")  # Indicate more rows exist
-
-                return "\n".join(formatted_rows)  # Multi-line tooltip
-
+                    formatted_rows.append("[...]")
+                return "<br>".join(formatted_rows)  # Replace \n with <br>
             return str(x)
 
         # Store full values as tooltips
         full_values = {col: df_pd[col].apply(lambda x: format_2d_array_for_tooltip(x) if isinstance(x, np.ndarray) and x.ndim == 2 else str(x))
                     for col in ndarray_columns}
 
-        # Apply truncation for display
+        # Apply truncation for display (shortened values in table)
         for col in ndarray_columns:
             df_pd[col] = df_pd[col].apply(truncate_array)  
 
         # **Assign tooltips efficiently using pd.concat() to avoid fragmentation**
-        #tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
-        #df_pd = pd.concat([df_pd, tooltip_df], axis=1)
+        tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
+        df_pd = pd.concat([df_pd, tooltip_df], axis=1)
 
         # **Set up AgGrid configuration**
         gb = GridOptionsBuilder.from_dataframe(df_pd)
@@ -180,6 +174,10 @@ class StreamlitGUI(GUI):
                 gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=120)
             else:
                 gb.configure_column(col, width=120)  # Set a reasonable width to trigger default tooltips
+                    
+        # Assign tooltips (full data)
+        for col in ndarray_columns:
+            gb.configure_column(col, tooltipField=col + "_tooltip")
 
         # Ensure grey tooltips appear correctly
         gb.configure_grid_options(suppressCellBrowserTooltip=False)  
@@ -196,7 +194,7 @@ class StreamlitGUI(GUI):
             df_pd,
             gridOptions=grid_options,
             fit_columns_on_grid_load=False,
-            enable_enterprise_modules=False,
+            enable_enterprise_modules=True,
             height=500,
             allow_unsafe_jscode=True,  # Required for tooltips
         )
