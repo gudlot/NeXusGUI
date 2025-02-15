@@ -108,19 +108,19 @@ class StreamlitGUI(GUI):
 
     def display_data_overview(self, df: pl.DataFrame):
         st.write("### Data Overview")
-        
+
         # Show summary statistics
         st.write(f"**Total Rows:** {df.height}")
         st.write(f"**Total Columns:** {len(df.columns)}")
-        
+
         # Ensure the filename column exists
         if "filename" not in df.columns:
             st.error("Filename column not found in the DataFrame.")
             return
-        
+
         # Move the filename column to the front
         df = df.select(["filename"] + [col for col in df.columns if col != "filename"])
-        
+
         # Convert Polars DataFrame to Pandas
         df_pd = df.to_pandas()
 
@@ -130,38 +130,61 @@ class StreamlitGUI(GUI):
 
         # Identify columns containing NumPy arrays
         ndarray_columns = [col for col in df_pd.columns if isinstance(df_pd[col].iloc[0], np.ndarray)]
-        
-        # Function to truncate NumPy arrays for display
+
         def truncate_array(x: Any, max_elements: int = 5) -> str:
-            """Convert numpy array to a truncated string representation while preserving full data for tooltips."""
+            """Convert NumPy array to a truncated string representation while preserving full data for tooltips."""
             if isinstance(x, np.ndarray):
-                return f"[{', '.join(map(str, x[:max_elements]))}, ...]"  # Show first `max_elements` elements only
+                if x.ndim == 1:
+                    return f"[{', '.join(map(str, x[:max_elements]))}, ...]"  # 1D array truncation
+                elif x.ndim == 2:
+                    return f"[{', '.join(map(str, x[0, :max_elements]))}, ...]"  # Show only first row, truncated
             return str(x)
 
-        # Store full values separately for tooltips
-        full_values = {col: df_pd[col].astype(str) for col in ndarray_columns}
+        def format_2d_array_for_tooltip(x: Any, max_rows: int = 3, max_cols: int = 5) -> str:
+            """Format 2D NumPy arrays as multi-line tooltips for better readability."""
+            if isinstance(x, np.ndarray) and x.ndim == 2:
+                rows, cols = x.shape
+                max_rows = min(rows, max_rows)  # Limit rows displayed
+                max_cols = min(cols, max_cols)  # Limit columns displayed
+                
+                formatted_rows = []
+                for i in range(max_rows):
+                    row_str = ", ".join(map(str, x[i, :max_cols]))  # Truncate columns
+                    formatted_rows.append(f"[{row_str}, ...]" if cols > max_cols else f"[{row_str}]")
+                
+                if rows > max_rows:
+                    formatted_rows.append("[...]")  # Indicate more rows exist
 
-        # Apply transformation to each NumPy array column
+                return "\n".join(formatted_rows)  # Multi-line tooltip
+
+            return str(x)
+
+        # Store full values as tooltips
+        full_values = {col: df_pd[col].apply(lambda x: format_2d_array_for_tooltip(x) if isinstance(x, np.ndarray) and x.ndim == 2 else str(x))
+                    for col in ndarray_columns}
+
+        # Apply truncation for display
         for col in ndarray_columns:
-            df_pd[col + "_tooltip"] = df_pd[col].astype(str)  # Store full values in a separate column for tooltips
-            df_pd[col] = df_pd[col].apply(truncate_array)  # Apply truncation for display
+            df_pd[col] = df_pd[col].apply(truncate_array)  
+
+        # **Assign tooltips efficiently using pd.concat() to avoid fragmentation**
+        tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
+        df_pd = pd.concat([df_pd, tooltip_df], axis=1)
 
         # **Set up AgGrid configuration**
         gb = GridOptionsBuilder.from_dataframe(df_pd)
 
-        # Set column widths and tooltips
+        # Configure columns
         for col in df_pd.columns:
-            if col in two_d_columns:
-                gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=150)
-            elif col == "filename":
-                gb.configure_column(col, width=250)
-            elif col in ndarray_columns:
-                gb.configure_column(col, width=180, tooltipField=col + "_tooltip")  # Add tooltip field
+            if col in ndarray_columns:
+                gb.configure_column(col, width=180, tooltipField=col + "_tooltip")  # Add tooltips
+            elif col in two_d_columns:
+                gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=200, tooltipField=col + "_tooltip")
             else:
                 gb.configure_column(col, width=120)
-        
-        # Allow manual resizing
-        gb.configure_grid_options(domLayout="normal", tooltipShowDelay=0)  # Enable tooltips instantly
+
+        # Allow manual resizing and enable tooltips
+        gb.configure_grid_options(domLayout="normal", tooltipShowDelay=0)  
         gb.configure_default_column(resizable=True)
 
         # Build grid options
@@ -176,8 +199,6 @@ class StreamlitGUI(GUI):
             height=500,
             allow_unsafe_jscode=True,  # Required for tooltips
         )
-
-
         
     def highlight_2d_cols(s):
         return ['background-color: yellow' if s.name in two_d_columns else '' for _ in s]
