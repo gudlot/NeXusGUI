@@ -64,6 +64,8 @@ class StreamlitGUI(GUI):
                 # Track changes in selected files
                 if "selected_files" not in st.session_state:
                     st.session_state.selected_files = set()
+                if "deleted_files" not in st.session_state:
+                    st.session_state.deleted_files = set()
                 
                 # Add new files to the DataFrame
                 new_files = set(selected_files) - st.session_state.selected_files
@@ -76,6 +78,7 @@ class StreamlitGUI(GUI):
                         else:
                             st.session_state.df = st.session_state.df.vstack(pl.DataFrame([new_data]))
                     st.session_state.selected_files.update(new_files)
+                    st.session_state.deleted_files -= new_files  # Remove from deleted files if re-added
                 
                 # Remove deleted files from the DataFrame
                 deleted_files = st.session_state.selected_files - set(selected_files)
@@ -84,9 +87,11 @@ class StreamlitGUI(GUI):
                         ~pl.col("filename").is_in(list(deleted_files))
                     )
                     st.session_state.selected_files -= deleted_files
+                    st.session_state.deleted_files.update(deleted_files)  # Track deleted files
                 
                 # Debug info
                 st.write("Selected Files:", selected_files)
+                st.write("Deleted Files:", st.session_state.deleted_files)
                 
                 # Display the updated DataFrame
                 if "df" in st.session_state and not st.session_state.df.is_empty():
