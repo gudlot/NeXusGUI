@@ -21,7 +21,6 @@ class GUI(ABC):
 
 class StreamlitGUI(GUI):
     def render(self, browser):
-        st.title("NXS File Browser")
         
         # Custom CSS to fix truncated file names
         st.markdown(
@@ -118,6 +117,11 @@ class StreamlitGUI(GUI):
 
         # Move the filename column to the front
         df = df.select(["filename"] + [col for col in df.columns if col != "filename"])
+        
+        if df.shape[0] == 0:
+            st.write("No data found!")
+        else:
+            st.write(df)
 
         # Convert Polars DataFrame to Pandas
         df_pd = df.to_pandas()
@@ -302,41 +306,111 @@ class StreamlitGUI(GUI):
 class NexusDataProcessor:
     def __init__(self):
         self.data = None
-    
-    def extract_data(self, h5_obj, path="/", data_dict=None):
+
+    def extract_data(self, h5_obj: h5py.Group, path: str = "/", data_dict: dict | None = None) -> dict:
         if data_dict is None:
             data_dict = {}
+        
         for key in h5_obj.keys():
             full_path = f"{path}{key}"
             item = h5_obj[key]
+            
             if isinstance(item, h5py.Group):
                 self.extract_data(item, full_path + "/", data_dict)
             elif isinstance(item, h5py.Dataset):
                 try:
                     data = item[()]
                     if isinstance(data, np.ndarray):
-                        data_dict[full_path] = data.tolist()
-                    elif isinstance(data, (bytes, str)):
-                        data_dict[full_path] = data.decode("utf-8") if isinstance(data, bytes) else data
+                        data_dict[full_path] = data
+                    elif isinstance(data, (bytes, bytearray)):
+                        data_dict[full_path] = data.decode("utf-8", errors="ignore")  # Avoid decoding errors
                     else:
-                        data_dict[full_path] = str(data)
+                        data_dict[full_path] = data
                 except Exception as e:
                     data_dict[full_path] = f"Error: {e}"
+        
         return data_dict
+
+    def find_nxentry(self, h5_obj, path="/"):
+        """Recursively find the NXentry group dynamically."""
+        for key in h5_obj.keys():
+            full_path = f"{path}{key}"
+            item = h5_obj[key]
+            
+            if isinstance(item, h5py.Group):
+                if item.attrs.get("NX_class") in [b"NXentry", "NXentry"]:
+                    print(f"Found NXentry: {full_path}")
+                    return item, full_path
+                # Recursively search in sub-groups **only if item is a group**
+                result = self.find_nxentry(item, full_path + "/")
+                if result[0]:
+                    return result
+        
+        return None, None
 
     def process_single_file(self, file_path: Path) -> dict:
         with h5py.File(file_path, "r") as f:
-            if "scan" in f:
-                data_dict = self.extract_data(f["scan"], "/scan/")
-                data_dict["filename"] = file_path.name
-                return data_dict
-            else:
-                return {"filename": file_path.name}
+            nxentry_group, nxentry_path = self.find_nxentry(f)
+            if not nxentry_group:
+                raise ValueError("No NXentry found in file. Ensure the file is correctly structured.")
+            
+            data_dict = self.extract_data(nxentry_group, nxentry_path + "/")
+            data_dict["filename"] = file_path.name
+            return data_dict
 
-    def process_multiple_files(self, file_paths: list) -> pl.DataFrame:
-        # Build all data in one go to avoid fragmentation
+    def process_multiple_files(self, file_paths: list | Path) -> pl.DataFrame:
+        if isinstance(file_paths, Path):
+            file_paths = [file_paths]  # Convert to a list if it's a single Path
+        
         all_data = [self.process_single_file(fp) for fp in file_paths]
         return pl.DataFrame(all_data)
+
+
+    def extract_time_series(self, file_path: Path, df: pl.DataFrame) -> pl.DataFrame:
+        with h5py.File(file_path, "r") as f:
+            nxentry_group, _ = self.find_nxentry(f)
+            if not nxentry_group:
+                raise ValueError("No NXentry found in file.")
+            
+            time_data = {}
+            if "/scan/start_time" in nxentry_group:
+                time_data["start_time"] = nxentry_group["/scan/start_time"][()].decode("utf-8")
+            if "/scan/end_time" in nxentry_group:
+                time_data["end_time"] = nxentry_group["/scan/end_time"][()].decode("utf-8")
+            if "/scan/data/epoch" in nxentry_group:
+                time_data["epoch"] = nxentry_group["/scan/data/epoch"][()]
+
+        if time_data:
+            start_time_str = df["/scan/start_time"].to_list()[0]
+            end_time_str = df["/scan/end_time"].to_list()[0]
+            epoch = np.array(df["/scan/data/epoch"].to_list()[0], dtype=np.float64)
+
+            # Convert start_time and end_time to Unix timestamps
+            start_time = dateutil.parser.isoparse(start_time_str).timestamp()
+            end_time = dateutil.parser.isoparse(end_time_str).timestamp()
+
+            # Use epoch directly as absolute timestamps
+            time_series_calc = np.array(epoch, dtype=np.float64)
+
+            # Ensure consistency with end_time
+            if not np.isclose(time_series_calc[-1], end_time, atol=1e-6):
+                raise ValueError("Epoch values do not match end_time!")
+
+            # Convert the array to a single element list to match DataFrame row structure
+            df = df.with_columns(pl.lit(time_series_calc.tolist()).alias("time_series_calc"))
+        
+        return df
+    
+    def list_groups(self, h5_obj, path="/"):
+        """Recursively list all groups and their attributes in the file."""
+        for key in h5_obj.keys():
+            full_path = f"{path}{key}"
+            item = h5_obj[key]
+
+            if isinstance(item, h5py.Group):
+                print(f"Group: {full_path}, Attributes: {dict(item.attrs)}")
+                self.list_groups(item, full_path + "/")  # Recurse into sub-groups
+
 
 class NXSFileBrowser:
     def __init__(self, gui: GUI):
