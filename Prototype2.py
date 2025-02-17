@@ -213,6 +213,36 @@ class StreamlitGUI(GUI):
                 height=500,
                 allow_unsafe_jscode=True,  # Required for tooltips
             )
+            
+            if "time_series_calc" in df_pd.columns:
+                st.write("time_series_calc column found in DataFrame.")
+            else:
+                st.error("time_series_calc column not found in DataFrame.")
+            
+            # Plotting functionality
+            if "time_series_calc" in df_pd.columns:
+                st.write("### Time Series Plot")
+
+                # Select a column to plot against time_series_calc
+                plot_column = st.selectbox(
+                    "Select a column to plot against time_series_calc:",
+                    [col for col in df_pd.columns if col != "time_series_calc"],
+                )
+
+                # Combine all time_series_calc values into a single list
+                time_series = np.concatenate(df_pd["time_series_calc"].tolist())
+
+                # Combine all values from the selected column into a single list
+                selected_values = np.concatenate(df_pd[plot_column].tolist())
+
+                # Create a DataFrame for plotting
+                plot_df = pd.DataFrame({
+                    "time_series_calc": time_series,
+                    plot_column: selected_values,
+                })
+
+                # Plot the data using st.line_chart
+                st.line_chart(plot_df.set_index("time_series_calc"))
         
     def highlight_2d_cols(s):
         return ['background-color: yellow' if s.name in two_d_columns else '' for _ in s]
@@ -386,10 +416,32 @@ class NexusDataProcessor:
             if not nxentry_group:
                 raise ValueError("No NXentry found in file. Ensure the file is correctly structured.")
             
+            # Extract general dataset
             data_dict = self.extract_data(nxentry_group, nxentry_path + "/")
             data_dict["filename"] = file_path.name
-            return data_dict
+            
+            # Extract time-related data
+            if "/scan/start_time" in data_dict and "/scan/end_time" in data_dict and "/scan/data/epoch" in data_dict:
+                start_time_str = data_dict["/scan/start_time"]
+                end_time_str = data_dict["/scan/end_time"]
+                epoch = np.array(data_dict["/scan/data/epoch"], dtype=np.float64)
 
+                # Convert to Unix timestamps
+                start_time = dateutil.parser.isoparse(start_time_str).timestamp()
+                end_time = dateutil.parser.isoparse(end_time_str).timestamp()
+
+                # Use epoch as absolute timestamps
+                time_series_calc = np.array(epoch, dtype=np.float64)
+
+                # Ensure consistency with end_time
+                if not np.isclose(time_series_calc[-1], end_time, atol=1e-6):
+                    raise ValueError("Epoch values do not match end_time!")
+
+                # Store time_series_calc in a list format to maintain dictionary structure
+                data_dict["/scan/time_series_calc"] = time_series_calc.tolist()
+
+        return data_dict
+    
     def process_multiple_files(self, file_paths: list | Path) -> pl.DataFrame:
         if isinstance(file_paths, Path):
             file_paths = [file_paths]  # Convert to a list if it's a single Path
@@ -398,40 +450,6 @@ class NexusDataProcessor:
         return pl.DataFrame(all_data)
 
 
-    def extract_time_series(self, file_path: Path, df: pl.DataFrame) -> pl.DataFrame:
-        with h5py.File(file_path, "r") as f:
-            nxentry_group, _ = self.find_nxentry(f)
-            if not nxentry_group:
-                raise ValueError("No NXentry found in file.")
-            
-            time_data = {}
-            if "/scan/start_time" in nxentry_group:
-                time_data["start_time"] = nxentry_group["/scan/start_time"][()].decode("utf-8")
-            if "/scan/end_time" in nxentry_group:
-                time_data["end_time"] = nxentry_group["/scan/end_time"][()].decode("utf-8")
-            if "/scan/data/epoch" in nxentry_group:
-                time_data["epoch"] = nxentry_group["/scan/data/epoch"][()]
-
-        if time_data:
-            start_time_str = df["/scan/start_time"].to_list()[0]
-            end_time_str = df["/scan/end_time"].to_list()[0]
-            epoch = np.array(df["/scan/data/epoch"].to_list()[0], dtype=np.float64)
-
-            # Convert start_time and end_time to Unix timestamps
-            start_time = dateutil.parser.isoparse(start_time_str).timestamp()
-            end_time = dateutil.parser.isoparse(end_time_str).timestamp()
-
-            # Use epoch directly as absolute timestamps
-            time_series_calc = np.array(epoch, dtype=np.float64)
-
-            # Ensure consistency with end_time
-            if not np.isclose(time_series_calc[-1], end_time, atol=1e-6):
-                raise ValueError("Epoch values do not match end_time!")
-
-            # Convert the array to a single element list to match DataFrame row structure
-            df = df.with_columns(pl.lit(time_series_calc.tolist()).alias("time_series_calc"))
-        
-        return df
     
     def list_groups(self, h5_obj, path="/"):
         """Recursively list all groups and their attributes in the file."""
