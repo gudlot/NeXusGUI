@@ -181,7 +181,12 @@ class StreamlitGUI(GUI):
             for col in df_pd.columns:
                 if col in two_d_columns:
                     # Highlight 2D columns with yellow background
-                    gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=120)
+                    # Highlight 2D columns with yellow background
+                    gb.configure_column(
+                        col,
+                        cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"},
+                        width=120,
+                    )
                 else:
                     gb.configure_column(col, width=120)  # Set a reasonable width to trigger default tooltips
 
@@ -238,11 +243,32 @@ class StreamlitGUI(GUI):
 
     def _get_2d_columns(self, df: pl.DataFrame) -> list[str]:
         """Identify columns containing 2D data."""
-        return [
-            col for col in df.columns 
-            if df[col].dtype == pl.List and 
-            any(isinstance(row, list) and any(isinstance(i, list) for i in row) for row in df[col].to_list())
-        ]
+        two_d_columns = []
+        
+        # Known columns with 2D data
+        known_2d_columns = {
+            "/scan/data/amptek_spectrum": (101, 2048),
+            "/scan/data/data": (101, 2048),
+            "/scan/instrument/amptek/data": (101, 2048),
+        }
+        
+        for col in df.columns:
+            # Check if the column is in the known 2D columns
+            if col in known_2d_columns:
+                two_d_columns.append(col)
+                continue  # Skip further checks for known columns
+            
+            # For other columns, check if they contain 2D arrays
+            # Filter out null values and get the first non-null value
+            non_null_values = df[col].filter(df[col].is_not_null()).to_list()
+            if non_null_values:
+                sample_value = non_null_values[0]  # Get the first non-null value
+                if isinstance(sample_value, np.ndarray) and sample_value.ndim == 2:
+                    two_d_columns.append(col)
+                elif isinstance(sample_value, list) and any(isinstance(item, (list, np.ndarray)) for item in sample_value):
+                    two_d_columns.append(col)
+        
+        return two_d_columns
 
     def _get_column_config(self, df: pl.DataFrame) -> dict:
         """Generate column configuration for the DataFrame."""
