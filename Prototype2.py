@@ -117,91 +117,97 @@ class StreamlitGUI(GUI):
 
         # Move the filename column to the front
         df = df.select(["filename"] + [col for col in df.columns if col != "filename"])
-        
+
         if df.shape[0] == 0:
             st.write("No data found!")
         else:
-            st.write(df)
+            # Convert Polars DataFrame to Pandas for easier display
+            df_pd = df.to_pandas()
 
-        # Convert Polars DataFrame to Pandas
-        df_pd = df.to_pandas()
+            # Identify 2D data columns
+            two_d_columns = self._get_2d_columns(df)
+            st.write("2D Columns:", two_d_columns)
 
-        # Identify 2D data columns
-        two_d_columns = self._get_2d_columns(df)
-        st.write("2D Columns:", two_d_columns)
+            # Identify columns containing NumPy arrays
+            ndarray_columns = [col for col in df_pd.columns if isinstance(df_pd[col].iloc[0], np.ndarray)]
 
-        # Identify columns containing NumPy arrays
-        ndarray_columns = [col for col in df_pd.columns if isinstance(df_pd[col].iloc[0], np.ndarray)]
+            # Function to truncate arrays or long strings
+            def truncate_array(x: Any, max_elements: int = 5) -> str:
+                """Truncate arrays or long strings for display."""
+                if isinstance(x, np.ndarray):
+                    if x.ndim == 1:
+                        truncated = f"[{', '.join(map(str, x[:max_elements]))}, ...]"
+                        return truncated if len(truncated) > 20 else truncated + " " * 20  # Ensure overflow
+                    elif x.ndim == 2:
+                        rows, cols = x.shape
+                        truncated = f"[{', '.join(map(str, x[0, :max_elements]))}, ...]"
+                        return truncated if len(truncated) > 20 else truncated + " " * 20  # Ensure overflow
+                elif isinstance(x, str) and len(x) > 20:  # Truncate long strings
+                    return x[:20] + "..."
+                return str(x) if len(str(x)) > 20 else str(x) + " " * 20  # Force overflow
 
-        def truncate_array(x: Any, max_elements: int = 5) -> str:
-            """Ensure formatted values are long enough to trigger tooltips."""
-            if isinstance(x, np.ndarray):
-                if x.ndim == 1:
-                    truncated = f"[{', '.join(map(str, x[:max_elements]))}, ...]"
-                    return truncated if len(truncated) > 20 else truncated + " " * 20  # Ensure overflow
-                elif x.ndim == 2:
+            # Function to format 2D arrays for tooltips
+            def format_2d_array_for_tooltip(x: Any, max_rows: int = 3, max_cols: int = 5) -> str:
+                """Format 2D arrays for tooltips."""
+                if isinstance(x, np.ndarray) and x.ndim == 2:
                     rows, cols = x.shape
-                    truncated = f"[{', '.join(map(str, x[0, :max_elements]))}, ...]"
-                    return truncated if len(truncated) > 20 else truncated + " " * 20  # Ensure overflow
-            return str(x) if len(str(x)) > 20 else str(x) + " " * 20  # Force overflow
+                    formatted_rows = []
+                    for i in range(min(rows, max_rows)):
+                        row_str = ", ".join(map(str, x[i, :min(cols, max_cols)]))
+                        formatted_rows.append(f"[{row_str}, ...]" if cols > max_cols else f"[{row_str}]")
+                    if rows > max_rows:
+                        formatted_rows.append("[...]")
+                    return "<br>".join(formatted_rows)  # Replace \n with <br>
+                return str(x)
 
-        def format_2d_array_for_tooltip(x: Any, max_rows: int = 3, max_cols: int = 5) -> str:
-            if isinstance(x, np.ndarray) and x.ndim == 2:
-                rows, cols = x.shape
-                formatted_rows = []
-                for i in range(min(rows, max_rows)):
-                    row_str = ", ".join(map(str, x[i, :min(cols, max_cols)]))
-                    formatted_rows.append(f"[{row_str}, ...]" if cols > max_cols else f"[{row_str}]")
-                if rows > max_rows:
-                    formatted_rows.append("[...]")
-                return "<br>".join(formatted_rows)  # Replace \n with <br>
-            return str(x)
+            # Store full values as tooltips
+            full_values = {
+                col: df_pd[col].apply(lambda x: format_2d_array_for_tooltip(x) if isinstance(x, np.ndarray) and x.ndim == 2 else str(x))
+                for col in ndarray_columns
+            }
 
-        # Store full values as tooltips
-        full_values = {col: df_pd[col].apply(lambda x: format_2d_array_for_tooltip(x) if isinstance(x, np.ndarray) and x.ndim == 2 else str(x))
-                    for col in ndarray_columns}
+            # Apply truncation for display (shortened values in table)
+            for col in df_pd.columns:
+                df_pd[col] = df_pd[col].apply(truncate_array)
 
-        # Apply truncation for display (shortened values in table)
-        for col in ndarray_columns:
-            df_pd[col] = df_pd[col].apply(truncate_array)  
+            # Assign tooltips efficiently using pd.concat() to avoid fragmentation
+            tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
+            df_pd = pd.concat([df_pd, tooltip_df], axis=1)
 
-        # **Assign tooltips efficiently using pd.concat() to avoid fragmentation**
-        tooltip_df = pd.DataFrame({col + "_tooltip": full_values[col] for col in ndarray_columns})
-        df_pd = pd.concat([df_pd, tooltip_df], axis=1)
+            # Set up AgGrid configuration
+            gb = GridOptionsBuilder.from_dataframe(df_pd)
 
-        # **Set up AgGrid configuration**
-        gb = GridOptionsBuilder.from_dataframe(df_pd)
+            # Configure columns without explicit tooltipField (forces grey tooltips)
+            for col in df_pd.columns:
+                if col in two_d_columns:
+                    # Highlight 2D columns with yellow background
+                    gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=120)
+                else:
+                    gb.configure_column(col, width=120)  # Set a reasonable width to trigger default tooltips
 
-        # Configure columns without explicit tooltipField (forces grey tooltips)
-        for col in df_pd.columns:
-            if col in two_d_columns:
-                gb.configure_column(col, cellStyle={"backgroundColor": "yellow", "whiteSpace": "normal"}, width=120)
-            else:
-                gb.configure_column(col, width=120)  # Set a reasonable width to trigger default tooltips
-                    
-        # Assign tooltips (full data)
-        for col in ndarray_columns:
-            gb.configure_column(col, tooltipField=col + "_tooltip")
+            # Assign tooltips (full data)
+            for col in ndarray_columns:
+                gb.configure_column(col, tooltipField=col + "_tooltip")
 
-        # Ensure grey tooltips appear correctly
-        gb.configure_grid_options(suppressCellBrowserTooltip=False)  
-        gb.configure_grid_options(domLayout="normal", tooltipShowDelay=0)
+            # Ensure grey tooltips appear correctly
+            gb.configure_grid_options(suppressCellBrowserTooltip=False)
+            gb.configure_grid_options(domLayout="normal", tooltipShowDelay=0)
 
-        # Enable column resizing and auto height
-        gb.configure_default_column(resizable=True, wrapText=False, autoHeight=False)  # **Auto height ensures tooltips trigger**
+            # Enable column resizing and auto height
+            gb.configure_default_column(resizable=True, wrapText=False, autoHeight=False)  # Auto height ensures tooltips trigger
 
-        # Build grid options
-        grid_options = gb.build()
+            # Build grid options
+            grid_options = gb.build()
 
-        # **Display using AgGrid**
-        grid_response = AgGrid(
-            df_pd,
-            gridOptions=grid_options,
-            fit_columns_on_grid_load=False,
-            enable_enterprise_modules=True,
-            height=500,
-            allow_unsafe_jscode=True,  # Required for tooltips
-        )
+            # Display using AgGrid
+            grid_response = AgGrid(
+                df_pd,
+                gridOptions=grid_options,
+                fit_columns_on_grid_load=False,
+                enable_enterprise_modules=True,
+                height=500,
+                allow_unsafe_jscode=True,  # Required for tooltips
+            )
         
     def highlight_2d_cols(s):
         return ['background-color: yellow' if s.name in two_d_columns else '' for _ in s]
