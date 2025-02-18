@@ -7,6 +7,9 @@ from abc import ABC, abstractmethod
 import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder
 from typing import Any
+from datetime import datetime
+import dateutil.parser
+import matplotlib.pyplot as plt
 
 class GUI(ABC):
     @abstractmethod
@@ -214,35 +217,83 @@ class StreamlitGUI(GUI):
                 allow_unsafe_jscode=True,  # Required for tooltips
             )
             
-            if "time_series_calc" in df_pd.columns:
-                st.write("time_series_calc column found in DataFrame.")
-            else:
-                st.error("time_series_calc column not found in DataFrame.")
+            self.display_function(df)
+                
+
+    def display_function(self, df: pl.DataFrame):
+        if "/scan/time_series_calc" in df.columns:
+            st.write("/scan/time_series_calc column found in DataFrame.")
+            time_series_length = len(df["/scan/time_series_calc"].to_list()[0])
             
-            # Plotting functionality
-            if "time_series_calc" in df_pd.columns:
-                st.write("### Time Series Plot")
+            # Find valid columns for plotting
+            valid_plot_columns = [
+                col for col in df.columns 
+                if col != "/scan/time_series_calc" 
+                and isinstance(df[col].to_list()[0], (list, np.ndarray)) 
+                and len(df[col].to_list()[0]) == time_series_length
+            ]
+            
+            st.write("Valid columns for plotting:", valid_plot_columns)
+            
+            if valid_plot_columns:
+                # Let the user select a column to plot
+                plot_column = st.selectbox("Select a column to plot against time_series_calc:", valid_plot_columns)
+                
+                # Display the first value of the selected column for debugging
+                st.write(f"First value of {plot_column}: {df[plot_column].to_list()[0]} (type: {type(df[plot_column].to_list()[0])})")
+                
+                # Call the plotting method
+                self.plot_columns_against_time(df, plot_column)
+            else:
+                st.error("No valid columns found for plotting. Ensure columns have numerical arrays matching /scan/time_series_calc length.")
+        else:
+            st.error("/scan/time_series_calc column not found in DataFrame.")
 
-                # Select a column to plot against time_series_calc
-                plot_column = st.selectbox(
-                    "Select a column to plot against time_series_calc:",
-                    [col for col in df_pd.columns if col != "time_series_calc"],
-                )
+                
+    def plot_columns_against_time(self, df: pl.DataFrame, plot_column: str):
+        if "/scan/time_series_calc" not in df.columns:
+            st.error("/scan/time_series_calc column is missing in DataFrame.")
+            return
+        
+        time_series_list = df["/scan/time_series_calc"].to_list()
+        values_list = df[plot_column].to_list()
+        
+        all_time_series = []
+        all_values = []
+        
+        # Map strings to unique integers for plotting
+        unique_strings = {value: idx for idx, value in enumerate(set(v for v in values_list if isinstance(v, str)))}
 
-                # Combine all time_series_calc values into a single list
-                time_series = np.concatenate(df_pd["time_series_calc"].tolist())
+        for time_series, value in zip(time_series_list, values_list):
+            all_time_series.extend(time_series)  # Preserve order row-wise
 
-                # Combine all values from the selected column into a single list
-                selected_values = np.concatenate(df_pd[plot_column].tolist())
+            # Handle numpy.ndarray by converting it to a list
+            if isinstance(value, np.ndarray):
+                value = value.tolist()
+            
+            if isinstance(value, str):
+                expanded_values = [unique_strings[value]] * len(time_series)
+            elif isinstance(value, (int, float)):
+                expanded_values = [value] * len(time_series)
+            elif isinstance(value, list) and len(value) == len(time_series):
+                expanded_values = value
+            else:
+                # Debugging: Print the problematic value and its type
+                st.error(f"Cannot plot {plot_column}: Invalid data format. Value: {value}, Type: {type(value)}")
+                return
+            
+            all_values.extend(expanded_values)
 
-                # Create a DataFrame for plotting
-                plot_df = pd.DataFrame({
-                    "time_series_calc": time_series,
-                    plot_column: selected_values,
-                })
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(all_time_series, all_values, marker="o", linestyle="-", label=plot_column)
+        ax.set_xlabel("Time")
+        ax.set_ylabel(plot_column)
+        ax.set_title(f"Plot of {plot_column} vs Time")
+        ax.legend()
+        ax.grid()
+        st.pyplot(fig)
 
-                # Plot the data using st.line_chart
-                st.line_chart(plot_df.set_index("time_series_calc"))
         
     def highlight_2d_cols(s):
         return ['background-color: yellow' if s.name in two_d_columns else '' for _ in s]
@@ -439,6 +490,8 @@ class NexusDataProcessor:
 
                 # Store time_series_calc in a list format to maintain dictionary structure
                 data_dict["/scan/time_series_calc"] = time_series_calc.tolist()
+                print('Length time series', len(data_dict["/scan/time_series_calc"]) )
+                
 
         return data_dict
     
