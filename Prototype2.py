@@ -10,6 +10,7 @@ from typing import Any
 from datetime import datetime
 import dateutil.parser
 import matplotlib.pyplot as plt
+import itertools
 
 class GUI(ABC):
     @abstractmethod
@@ -221,77 +222,85 @@ class StreamlitGUI(GUI):
                 
 
     def display_function(self, df: pl.DataFrame):
-        if "/scan/time_series_calc" in df.columns:
-            st.write("/scan/time_series_calc column found in DataFrame.")
-            time_series_length = len(df["/scan/time_series_calc"].to_list()[0])
-            
-            # Find valid columns for plotting
-            valid_plot_columns = [
-                col for col in df.columns 
-                if col != "/scan/time_series_calc" 
-                and isinstance(df[col].to_list()[0], (list, np.ndarray)) 
-                and len(df[col].to_list()[0]) == time_series_length
-            ]
-            
-            st.write("Valid columns for plotting:", valid_plot_columns)
-            
-            if valid_plot_columns:
-                # Let the user select a column to plot
-                plot_column = st.selectbox("Select a column to plot against time_series_calc:", valid_plot_columns)
-                
-                # Display the first value of the selected column for debugging
-                st.write(f"First value of {plot_column}: {df[plot_column].to_list()[0]} (type: {type(df[plot_column].to_list()[0])})")
-                
-                # Call the plotting method
-                self.plot_columns_against_time(df, plot_column)
-            else:
-                st.error("No valid columns found for plotting. Ensure columns have numerical arrays matching /scan/time_series_calc length.")
-        else:
+        if "/scan/time_series_calc" not in df.columns:
             st.error("/scan/time_series_calc column not found in DataFrame.")
+            return
+        
+        st.write("/scan/time_series_calc column found in DataFrame.")
+        valid_plot_columns = [col for col in df.columns if col != "/scan/time_series_calc"]
+        st.write(f"Total number of columns (excluding /scan/time_series_calc): {len(valid_plot_columns)}")
+        
+        unique_data_types = {type(df[col].to_list()[0]) for col in valid_plot_columns}
+        st.write("Unique data types in the DataFrame:", unique_data_types)
+        
+        if valid_plot_columns:
+            self.selected_column = st.selectbox("Select a column to plot against time:", valid_plot_columns)
+            if self.selected_column:
+                self.plot_columns_against_time(df, self.selected_column)
 
-                
     def plot_columns_against_time(self, df: pl.DataFrame, plot_column: str):
         if "/scan/time_series_calc" not in df.columns:
             st.error("/scan/time_series_calc column is missing in DataFrame.")
             return
         
+        # Ensure time periods within each row are sorted in ascending order
+        #df = df.with_columns(pl.col("/scan/time_series_calc").map_elements(lambda x: np.sort(x)))
+        
+        # Sort dataframe by the earliest timestamp in each row
+   
+        
+        df = df.with_columns(pl.col("/scan/time_series_calc").cast(pl.List(pl.Float64)))
+        df = df.with_columns(earliest_time=pl.col("/scan/time_series_calc").list.first()).sort("earliest_time").drop("earliest_time")
+        
+        
         time_series_list = df["/scan/time_series_calc"].to_list()
         values_list = df[plot_column].to_list()
+        filenames = df["filename"].to_list() if "filename" in df.columns else [f"Row {i}" for i in range(len(time_series_list))]
         
-        all_time_series = []
-        all_values = []
+        markers = {i: marker for i, marker in zip(range(len(time_series_list)), itertools.cycle(['o', 's', 'D', '^', 'v', '<', '>']))}
+        colors = {i: color for i, color in zip(range(len(time_series_list)), itertools.cycle(plt.cm.tab10.colors))}
         
-        # Map strings to unique integers for plotting
-        unique_strings = {value: idx for idx, value in enumerate(set(v for v in values_list if isinstance(v, str)))}
-
-        for time_series, value in zip(time_series_list, values_list):
-            all_time_series.extend(time_series)  # Preserve order row-wise
-
-            # Handle numpy.ndarray by converting it to a list
-            if isinstance(value, np.ndarray):
-                value = value.tolist()
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        unique_strings = {val: idx for idx, val in enumerate(sorted(set(filter(lambda x: isinstance(x, str), values_list))))}
+        
+        for idx, (time_series, value, filename) in enumerate(zip(time_series_list, values_list, filenames)):
+            length = len(time_series)
+            marker = markers[idx]
+            color = colors[idx]
             
             if isinstance(value, str):
-                expanded_values = [unique_strings[value]] * len(time_series)
+                expanded_values = [unique_strings[value]] * length
+            elif isinstance(value, np.ndarray):
+                if value.shape == (1,):
+                    expanded_values = [value.item()] * length
+                elif len(value) == length:
+                    expanded_values = value.tolist()
+                else:
+                    st.error(f"Cannot plot {plot_column}: Invalid data format.")
+                    return
             elif isinstance(value, (int, float)):
-                expanded_values = [value] * len(time_series)
-            elif isinstance(value, list) and len(value) == len(time_series):
-                expanded_values = value
+                expanded_values = [value] * length
             else:
-                # Debugging: Print the problematic value and its type
-                st.error(f"Cannot plot {plot_column}: Invalid data format. Value: {value}, Type: {type(value)}")
+                st.error(f"Cannot plot {plot_column}: Unsupported data format.")
                 return
             
-            all_values.extend(expanded_values)
-
-        # Create the plot
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(all_time_series, all_values, marker="o", linestyle="-", label=plot_column)
+            ax.plot(time_series, expanded_values, marker=marker, linestyle="-", label=filename, color=color)
+        
         ax.set_xlabel("Time")
         ax.set_ylabel(plot_column)
         ax.set_title(f"Plot of {plot_column} vs Time")
-        ax.legend()
         ax.grid()
+        
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+        fig.tight_layout()
+        
+        # Add compact categorical legend if the values are strings
+        if unique_strings:
+            legend_text = "\n".join([f"{idx}: {val}" for val, idx in unique_strings.items()])
+            st.text("Categorical Legend:")
+            st.text(legend_text)
+        
         st.pyplot(fig)
 
         
