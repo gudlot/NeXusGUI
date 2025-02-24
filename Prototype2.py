@@ -244,64 +244,90 @@ class StreamlitGUI(GUI):
             return
         
         # Ensure time periods within each row are sorted in ascending order
-        #df = df.with_columns(pl.col("/scan/time_series_calc").map_elements(lambda x: np.sort(x)))
+        df = df.with_columns(pl.col("/scan/time_series_calc").map_elements(lambda x: np.sort(x)))
         
         # Sort dataframe by the earliest timestamp in each row
-   
-        
-        df = df.with_columns(pl.col("/scan/time_series_calc").cast(pl.List(pl.Float64)))
         df = df.with_columns(earliest_time=pl.col("/scan/time_series_calc").list.first()).sort("earliest_time").drop("earliest_time")
-        
         
         time_series_list = df["/scan/time_series_calc"].to_list()
         values_list = df[plot_column].to_list()
         filenames = df["filename"].to_list() if "filename" in df.columns else [f"Row {i}" for i in range(len(time_series_list))]
         
-        markers = {i: marker for i, marker in zip(range(len(time_series_list)), itertools.cycle(['o', 's', 'D', '^', 'v', '<', '>']))}
-        colors = {i: color for i, color in zip(range(len(time_series_list)), itertools.cycle(plt.cm.tab10.colors))}
-        
-        fig, ax = plt.subplots(figsize=(10, 5))
-        
-        unique_strings = {val: idx for idx, val in enumerate(sorted(set(filter(lambda x: isinstance(x, str), values_list))))}
-        
-        for idx, (time_series, value, filename) in enumerate(zip(time_series_list, values_list, filenames)):
-            length = len(time_series)
-            marker = markers[idx]
-            color = colors[idx]
+        if isinstance(values_list[0], np.ndarray) and len(values_list[0].shape) == 2:
+            st.write("2D data detected. Choose visualization mode:")
+            plot_mode = st.radio("Visualization Mode", ("Line Plot (Single Index)", "Heatmap"))
             
-            if isinstance(value, str):
-                expanded_values = [unique_strings[value]] * length
-            elif isinstance(value, np.ndarray):
-                if value.shape == (1,):
-                    expanded_values = [value.item()] * length
-                elif len(value) == length:
-                    expanded_values = value.tolist()
+            if plot_mode == "Line Plot (Single Index)":
+                index_choice = st.slider("Select index along second dimension:", 0, values_list[0].shape[1] - 1, 0)
+                fig, ax = plt.subplots(figsize=(10, 5))
+                
+                for idx, (time_series, value, filename) in enumerate(zip(time_series_list, values_list, filenames)):
+                    if index_choice < value.shape[1]:
+                        ax.plot(time_series, value[:, index_choice], label=filename)
+                
+                ax.set_xlabel("Time")
+                ax.set_ylabel(f"{plot_column}[{index_choice}]")
+                ax.set_title(f"Plot of {plot_column}[{index_choice}] vs Time")
+                ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+                ax.grid()
+                fig.tight_layout()
+                st.pyplot(fig)
+            
+            elif plot_mode == "Heatmap":
+                combined_time = np.concatenate(time_series_list)
+                combined_values = np.vstack(values_list)
+                
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sns.heatmap(combined_values.T, cmap="viridis", xticklabels=False, yticklabels=False, ax=ax)
+                ax.set_xlabel("Time")
+                ax.set_ylabel("Index in second dimension")
+                ax.set_title(f"Heatmap of {plot_column} over Time")
+                st.pyplot(fig)
+                
+        else:
+            markers = {i: marker for i, marker in zip(range(len(time_series_list)), itertools.cycle(['o', 's', 'D', '^', 'v', '<', '>']))}
+            colors = {i: color for i, color in zip(range(len(time_series_list)), itertools.cycle(plt.cm.tab10.colors))}
+            
+            fig, ax = plt.subplots(figsize=(10, 5))
+            unique_strings = {val: idx for idx, val in enumerate(sorted(set(filter(lambda x: isinstance(x, str), values_list))))}
+            
+            for idx, (time_series, value, filename) in enumerate(zip(time_series_list, values_list, filenames)):
+                length = len(time_series)
+                marker = markers[idx]
+                color = colors[idx]
+                
+                if isinstance(value, str):
+                    expanded_values = [unique_strings[value]] * length
+                elif isinstance(value, np.ndarray):
+                    if value.shape == (1,):
+                        expanded_values = [value.item()] * length
+                    elif len(value) == length:
+                        expanded_values = value.tolist()
+                    else:
+                        st.error(f"Cannot plot {plot_column}: Invalid data format.")
+                        return
+                elif isinstance(value, (int, float)):
+                    expanded_values = [value] * length
                 else:
-                    st.error(f"Cannot plot {plot_column}: Invalid data format.")
+                    st.error(f"Cannot plot {plot_column}: Unsupported data format.")
                     return
-            elif isinstance(value, (int, float)):
-                expanded_values = [value] * length
-            else:
-                st.error(f"Cannot plot {plot_column}: Unsupported data format.")
-                return
+                
+                ax.plot(time_series, expanded_values, marker=marker, linestyle="-", label=filename, color=color)
             
-            ax.plot(time_series, expanded_values, marker=marker, linestyle="-", label=filename, color=color)
-        
-        ax.set_xlabel("Time")
-        ax.set_ylabel(plot_column)
-        ax.set_title(f"Plot of {plot_column} vs Time")
-        ax.grid()
-        
-        ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
-        fig.tight_layout()
-        
-        # Add compact categorical legend if the values are strings
-        if unique_strings:
-            legend_text = "\n".join([f"{idx}: {val}" for val, idx in unique_strings.items()])
-            st.text("Categorical Legend:")
-            st.text(legend_text)
-        
-        st.pyplot(fig)
+            ax.set_xlabel("Time")
+            ax.set_ylabel(plot_column)
+            ax.set_title(f"Plot of {plot_column} vs Time")
+            ax.grid()
+            
+            ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+            fig.tight_layout()
+            
+            if unique_strings:
+                legend_text = "\n".join([f"{idx}: {val}" for val, idx in unique_strings.items()])
+                st.text("Categorical Legend:")
+                st.text(legend_text)
+            
+            st.pyplot(fig)
 
         
     def highlight_2d_cols(s):
