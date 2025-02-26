@@ -141,22 +141,21 @@ class NeXusProcessor:
 
     
     def to_dict(self) -> dict:
-        """Convert extracted data to a dictionary format for DataFrame conversion."""
+        """Convert extracted data to a structured dictionary for DataFrame conversion."""
         result = {
             "filename": self.file_path.name,
-            "scan_command": self.data_dict.get("scan_command", {}).get("value", None),
-            "scan_id": self.data_dict.get("scan_id", {}).get("value", None),
+            "scan_command": self.data_dict.get("scan_command", {}).get("value"),
+            "scan_id": self.data_dict.get("scan_id", {}).get("value"),
         }
 
-        # Add value columns for all keys
+        # Process all dataset values and units in a single loop
         for key, info in self.data_dict.items():
-            if "value" in info:
-                result[f"{key}_value"] = info["value"]
+            value = info.get("value")
+            unit = info.get("unit")  # May be None
 
-        # Add unit columns only if the unit exists
-        for key, info in self.data_dict.items():
-            if "unit" in info:
-                result[f"{key}_unit"] = info["unit"]
+            result[key] = value
+            if unit is not None:  # Only add unit columns if they exist
+                result[f"{key}_unit"] = unit
 
         return result
 
