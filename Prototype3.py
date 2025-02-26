@@ -7,6 +7,9 @@ import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder
 import logging
 import re
+import h5py 
+
+
 
 
 # Set up logging
@@ -76,7 +79,7 @@ class FileFilterApp:
         self.plot_data = {}
 
     def run(self):
-        st.title("File Filter and Plotting App")
+        st.title("NeXus-Fio-File Plotting App")
 
         # Create two columns, with the right column wider for plotting
         col1, col2 = st.columns([2, 3])
@@ -235,6 +238,8 @@ class FileFilterApp:
             pass
         else:
             st.write("No data to plot yet.")
+            
+ 
 
 if __name__ == "__main__":
     app = FileFilterApp()
