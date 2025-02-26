@@ -83,14 +83,14 @@ class NeXusProcessor:
                         if "unit" in obj.attrs:
                             unit = obj.attrs["unit"]
                             self.data_dict[path]["unit"] = unit  # Only add if it exists
-                        else:
-                            print(f"Skipping unit for {path}: No unit attribute found")  # Debugging output
+                        #else:
+                            #print(f"Skipping unit for {path}: No unit attribute found")  # Debugging output
 
 
 
                         # Debug specific key
-                        if path == "/scan/start_time":
-                            print(f"Extracted /scan/start_time: {value} (type={type(value)})")
+                        #if path == "/scan/start_time":
+                        #    print(f"Extracted /scan/start_time: {value} (type={type(value)})")
 
 
 
@@ -103,7 +103,7 @@ class NeXusProcessor:
                     if value is not None:
                         self.data_dict[key] = {"value": value}  # Store correctly
 
-                print(f"Data dictionary after scan metadata extraction:\n {self.data_dict}\n")
+                #print(f"Data dictionary after scan metadata extraction:\n {self.data_dict}\n")
 
         except Exception as e:
             logging.warning(f"Error extracting data from {self.file_path}: {e}")
@@ -249,15 +249,17 @@ if __name__ == "__main__":
     # Print the first few rows of the DataFrame (optional, for debugging)
     #print("\nFirst few rows of the DataFrame:")
     print(df.head())
-   
-   
+      
     
     print(df["filename"])
     
     print(f'\n')
-    print(df.columns)
-    print(df.columns[-1])   
+    #print(df.columns)
+    #print(df.columns[-1])   
     
+    #How to search columns
+    matching_columns = [col for col in df.columns if "scan_" in col]
+    print(matching_columns)
 
     
     with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as f:
