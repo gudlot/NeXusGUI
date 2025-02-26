@@ -142,14 +142,23 @@ class NeXusProcessor:
     
     def to_dict(self) -> dict:
         """Convert extracted data to a dictionary format for DataFrame conversion."""
-        return {
+        result = {
             "filename": self.file_path.name,
             "scan_command": self.data_dict.get("scan_command", {}).get("value", None),
             "scan_id": self.data_dict.get("scan_id", {}).get("value", None),
-            **{f"{key}_value": info.get("value", None) for key, info in self.data_dict.items()},
-            **{f"{key}_unit": info.get("unit", None) for key, info in self.data_dict.items()},
         }
 
+        # Add value columns for all keys
+        for key, info in self.data_dict.items():
+            if "value" in info:
+                result[f"{key}_value"] = info["value"]
+
+        # Add unit columns only if the unit exists
+        for key, info in self.data_dict.items():
+            if "unit" in info:
+                result[f"{key}_unit"] = info["unit"]
+
+        return result
 
 
 class NeXusBatchProcessor(BaseProcessor):
@@ -240,12 +249,9 @@ if __name__ == "__main__":
     
     # Print the first few rows of the DataFrame (optional, for debugging)
     #print("\nFirst few rows of the DataFrame:")
-    #print(df.head())
+    print(df.head())
    
-    
-    print(df["/scan/start_time_value"])
-    
-    print(df["/scan/start_time_unit"])
+   
     
     print(df["filename"])
     
@@ -253,7 +259,7 @@ if __name__ == "__main__":
     print(df.columns)
     print(df.columns[-1])   
     
-    print(df["/scan/instrument/lisa_detector/lisa_detector_stage/beta_unit"])
+
     
     with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as f:
         if "/scan/start_time" in f:
