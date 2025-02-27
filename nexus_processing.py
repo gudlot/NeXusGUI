@@ -232,6 +232,17 @@ class NeXusBatchProcessor(BaseProcessor):
             
             # Ensure 'filename' is the first column
             self._ensure_filename_first_column()
+            
+            
+    def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
+        """Return a LazyFrame containing only filename, scan_id, and scan_command."""
+        #TODO:Remmber u can use latter .collect, i.e. get_core_metadata.collect() to get the values
+        
+        self.process_files(force_reload)
+        if self._df is None:
+            raise ValueError("No processed data available.")
+        
+        return self._df.lazy().select(["filename", "scan_id", "scan_command"])
 
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
         """Return the processed data as a Polars DataFrame."""
@@ -256,11 +267,15 @@ if __name__ == "__main__":
     processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
     
     # Process the files and get the DataFrame
-    df = processor.get_dataframe()
-    
+    #df = processor.get_dataframe()
     # Print the DataFrame
-    print("Processed DataFrame:")
-    print(df)
+    #print("Processed DataFrame:")
+    #print(df.head())
+    
+    df_lazy= processor.get_lazy_dataframe()
+    print(df_lazy.head())
+       
+    
     
     # Print the structure list (optional, for debugging)
     #print("\nStructure List:")
@@ -268,22 +283,16 @@ if __name__ == "__main__":
     #for item in structure_list:
     #    print(item)
     
-    # Print the first few rows of the DataFrame (optional, for debugging)
-    #print("\nFirst few rows of the DataFrame:")
-    print(df.head())
-      
-    
-    print(df["filename"])
-    
-    print(f'\n')
+        
+    #print(df["filename"])
+    #print(f'\n')
     #print(df.columns)
     #print(df.columns[-1])   
     
     #How to search columns
-    matching_columns = [col for col in df.columns if "scan_" in col]
-    print(matching_columns)
-    
-    processor.update_files()
+    #matching_columns = [col for col in df.columns if "scan_" in col]
+    #print(matching_columns)
+    #processor.update_files()
 
     
     with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as f:
