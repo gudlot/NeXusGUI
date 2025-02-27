@@ -86,8 +86,6 @@ class NeXusProcessor:
                         #else:
                             #print(f"Skipping unit for {path}: No unit attribute found")  # Debugging output
 
-
-
                         # Debug specific key
                         #if path == "/scan/start_time":
                         #    print(f"Extracted /scan/start_time: {value} (type={type(value)})")
@@ -158,6 +156,12 @@ class NeXusProcessor:
                 result[f"{key}_unit"] = unit
 
         return result
+    
+    
+    def process(self) -> dict: 
+        """Extracts data and returns it as a structured dictionary."""
+        self.extract_nexus_data()
+        return self.to_dict()
 
 
 class NeXusBatchProcessor(BaseProcessor):
@@ -192,8 +196,7 @@ class NeXusBatchProcessor(BaseProcessor):
                 continue
 
             processor = NeXusProcessor(str_path)
-            processor.extract_nexus_data()
-            file_data = processor.to_dict()
+            file_data = processor.process()
             
             # Add human-readable time if 'epoch' is present
             file_data = self._add_human_readable_time(file_data)
