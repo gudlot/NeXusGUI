@@ -77,6 +77,7 @@ class FileFilterApp:
         self.extension_filter = ""
         self.selected_files = []
         self.plot_data = {}
+        self.processed_data = {}
 
     def run(self):
         st.title("NeXus-Fio-File Plotting App")
@@ -98,6 +99,11 @@ class FileFilterApp:
             "Enter the directory path:", 
             value=self.path if self.path else "/Users/lotzegud/P08/fio_nxs_and_cmd_tool"
         )
+        
+        if st.button("Force Reload"):
+            st.cache_data.clear()
+            self.processed_data.clear()
+            st.rerun()
 
         if self.path and Path(self.path).is_dir():
             # Ensure session state keys exist
