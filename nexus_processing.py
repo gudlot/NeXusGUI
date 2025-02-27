@@ -33,81 +33,94 @@ class NeXusProcessor:
                 result = self.find_nxentry(item, full_path, is_root=False)
                 if result[0]:  # If a valid NXentry is found in recursion, return it
                     return result
+            
 
         if is_root:
-            print(f"No NXentry found in {self.file_path}.")
+            logging.warning(f"No NXentry found in {self.file_path}.")
         return None, None
+      
+    
 
-    def extract_nexus_data(self):
-        """Extracts dataset paths, metadata, and the hierarchical structure."""
+    def process(self) -> dict:
+        """Extracts data and returns it as a structured dictionary."""
         try:
             with h5py.File(self.file_path, 'r') as f:
                 nx_entry, nx_entry_path = self.find_nxentry(f)
                 if nx_entry is None:
-                    print(f"Skipping file {self.file_path}: No NXentry found.")
-                    return
+                    logging.warning(f"Skipping file {self.file_path}: No NXentry found.")
+                    return {}
 
-                def process_item(name: str, obj):
-                    """Processes each object using visititems() and builds structure."""
-                    path = f"{nx_entry_path}/{name}"
-
-                    # Build hierarchical structure dictionary
-                    levels = path.strip("/").split("/")
-                    sub_dict = self.structure_dict
-                    for level in levels[:-1]:  
-                        sub_dict = sub_dict.setdefault(level, {})
-
-                    # Mark groups and datasets explicitly
-                    if isinstance(obj, h5py.Group):
-                        sub_dict[levels[-1]] = {"type": "group", "children": {}}
-                    else:
-                        sub_dict[levels[-1]] = {"type": "dataset", "shape": obj.shape, "dtype": str(obj.dtype)}
-
-                    if isinstance(obj, h5py.Dataset):
-                        shape = obj.shape
-                        dtype = obj.dtype
-
-                        # Correctly extract string-based datasets
-                        if dtype == object or dtype.kind in {"U", "S"}:  # Strings or HDF5 object type
-                            value = obj[()]
-                            if isinstance(value, bytes):  
-                                value = value.decode()  # Convert bytes to string
-                        elif shape == () or obj.size == 1:  # Scalar datasets
-                            value = obj[()]
-                        else:  # Arrays: only store path reference
-                            value = f"[Array] {path} (shape={shape}, dtype={dtype})"
-
-                        # Ensure every key in data_dict is a dictionary before adding values
-                        self.data_dict.setdefault(path, {})["value"] = value
-
-                        if "unit" in obj.attrs:
-                            unit = obj.attrs["unit"]
-                            self.data_dict[path]["unit"] = unit  # Only add if it exists
-                        #else:
-                            #print(f"Skipping unit for {path}: No unit attribute found")  # Debugging output
-
-                        # Debug specific key
-                        #if path == "/scan/start_time":
-                        #    print(f"Extracted /scan/start_time: {value} (type={type(value)})")
-
-
-
-                # Process all datasets first
-                nx_entry.visititems(process_item)
-
-                # Extract scan metadata (scan_command, scan_id) last to avoid duplicates
-                scan_metadata = self.extract_scan_metadata(nx_entry_path, f)
+                self._extract_datasets(nx_entry, nx_entry_path)
+                scan_metadata = self._extract_scan_metadata(nx_entry_path, f)
                 for key, value in scan_metadata.items():
-                    if value is not None:
-                        self.data_dict[key] = {"value": value}  # Store correctly
-
-                #print(f"Data dictionary after scan metadata extraction:\n {self.data_dict}\n")
+                    self.data_dict[key] = {"value": value}
 
         except Exception as e:
-            logging.warning(f"Error extracting data from {self.file_path}: {e}")
+            logging.error(f"Error extracting data from {self.file_path}: {e}")
+
+        return self.to_dict()
+    
+    
+    def _extract_datasets(self, nx_entry: h5py.Group, nx_entry_path:str):
+        """Extracts datasets and their attributes into data_dict and structure_dict."""
+        def process_item(name: str, obj):
+            """Processes each object using visititems() and builds structure."""
+            path = f"{nx_entry_path}/{name}"
+
+            # Build hierarchical structure dictionary
+            levels = path.strip("/").split("/")
+            sub_dict = self.structure_dict
+            for level in levels[:-1]:  
+                sub_dict = sub_dict.setdefault(level, {})
+
+            # Mark groups and datasets explicitly
+            if isinstance(obj, h5py.Group):
+                sub_dict[levels[-1]] = {"type": "group", "children": {}}
+            else:
+                sub_dict[levels[-1]] = {"type": "dataset", "shape": obj.shape, "dtype": str(obj.dtype)}
+
+            if isinstance(obj, h5py.Dataset):
+                self._store_dataset(path, obj)
+
+        # Process all datasets first
+        nx_entry.visititems(process_item)
+
+        
+        #print(f"Data dictionary after scan metadata extraction:\n {self.data_dict}\n")    
 
 
-    def extract_scan_metadata(self, nx_entry_path: str, h5file: h5py.File) -> dict:
+    def _store_dataset(self, path: str, obj: h5py.Dataset):
+        """Efficiently stores dataset values and unit information in data_dict."""
+        
+        shape = obj.shape
+        dtype = obj.dtype
+        
+        # Efficient handling of different data types
+        if dtype.kind in {"U", "S"}:  # Unicode or byte strings
+            value = obj.asstr()[()]
+        elif shape == () or obj.size == 1:  # Scalar datasets
+            value = obj[()]
+        else:
+            value = obj  #Stores the reference to the dataset (obj) instead of immediately loading it 
+
+        #TODO:
+        # Store reference to dataset for all cases (no eager loading)
+        #value = obj if dtype.kind not in {"U", "S"} else obj.asstr()[()]
+
+
+        # Store in data_dict
+        self.data_dict[path] = {"value": value}
+        
+        # Add unit if available
+        unit = obj.attrs.get("unit", None)  
+        if unit is not None:
+            self.data_dict[path]["unit"] = unit
+
+
+
+
+
+    def _extract_scan_metadata(self, nx_entry_path: str, h5file: h5py.File) -> dict:
         """Extracts scan metadata from a NeXus file and returns it as a dictionary."""
         scan_program_name_path = f"{nx_entry_path}/program_name"
         metadata = {}
@@ -129,7 +142,8 @@ class NeXusProcessor:
 
                             metadata[key] = value  # Store in dictionary
                     except Exception as e:
-                        print(f"Warning: Failed to extract attribute '{key}' from {scan_program_name_path}: {e}")
+                        logging.warning(f"Failed to extract attribute '{key}' from {scan_program_name_path}: {e}")
+
 
         except Exception as e:
             print(f"Error: Failed to access '{scan_program_name_path}' in the NeXus file: {e}")
@@ -156,13 +170,7 @@ class NeXusProcessor:
                 result[f"{key}_unit"] = unit
 
         return result
-    
-    
-    def process(self) -> dict: 
-        """Extracts data and returns it as a structured dictionary."""
-        self.extract_nexus_data()
-        return self.to_dict()
-
+   
 
 class NeXusBatchProcessor(BaseProcessor):
     def __init__(self, directory: str):
@@ -176,17 +184,24 @@ class NeXusBatchProcessor(BaseProcessor):
         logging.info(f"Found {len(self.nxs_files)} NeXus files.")
 
     def update_files(self):
-        """Check for new files in the directory and update the file list."""
-        all_files = set(self.directory.glob("*.nxs"))
-        new_files = all_files - set(self.processed_files.keys())
+        """Check for new files in the directory and update the file list while maintaining order."""
+        all_files = sorted(self.directory.glob("*.nxs"))  # Ensure a sorted order
+        existing_files = set(self.processed_files.keys())
 
-        if new_files:
-            logging.info(f"Detected {len(new_files)} new files.")
-            self.nxs_files.extend(new_files)  # Append new files while maintaining order
+        self.nxs_files = [file for file in all_files if str(file) not in existing_files] + [
+            file for file in self.nxs_files if str(file) in existing_files
+        ]
+
+        if len(self.nxs_files) > len(existing_files):
+            logging.info(f"Detected {len(self.nxs_files) - len(existing_files)} new files.")
 
     def process_files(self, force_reload: bool = False):
         """Processes all NeXus files, caching results and avoiding redundant work."""
         self.update_files()  # Check for new files before processing
+        
+        # Only clear the structure list if a full reload is requested
+        if force_reload:
+            self.structure_list.clear()
         
         for file_path in self.nxs_files:
             str_path = str(file_path)
@@ -198,21 +213,25 @@ class NeXusBatchProcessor(BaseProcessor):
             processor = NeXusProcessor(str_path)
             file_data = processor.process()
             
-            # Add human-readable time if 'epoch' is present
-            file_data = self._add_human_readable_time(file_data)
+            if file_data:
+                # Add human-readable time if 'epoch' is present
+                file_data = self._add_human_readable_time(file_data)
+                
+                # Add filename (stripped of path) to the file_data dictionary
+                file_data = self._add_filename(file_data, file_path)
+
+                # Cache the processed data
+                self.processed_files[str_path] = file_data
+                self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
+
+        # Update cached DataFrame only if there is processed data
+        if self.processed_files:
+
+            # Update cached DataFrame after processing
+            self._df = pl.DataFrame(list(self.processed_files.values()))
             
-            # Add filename (stripped of path) to the file_data dictionary
-            file_data = self._add_filename(file_data, file_path)
-
-            # Cache the processed data
-            self.processed_files[str_path] = file_data
-            self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
-
-        # Update cached DataFrame after processing
-        self._df = pl.DataFrame(list(self.processed_files.values()))
-        
-        # Ensure 'filename' is the first column
-        self._ensure_filename_first_column()
+            # Ensure 'filename' is the first column
+            self._ensure_filename_first_column()
 
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
         """Return the processed data as a Polars DataFrame."""
@@ -222,8 +241,8 @@ class NeXusBatchProcessor(BaseProcessor):
     def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return the processed data as a lazy-loaded Polars DataFrame."""
         self.process_files(force_reload)
-        return pl.LazyFrame(self._df)
-
+        return self._df.lazy()
+    
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
         self.process_files(force_reload)
@@ -263,6 +282,8 @@ if __name__ == "__main__":
     #How to search columns
     matching_columns = [col for col in df.columns if "scan_" in col]
     print(matching_columns)
+    
+    processor.update_files()
 
     
     with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as f:
