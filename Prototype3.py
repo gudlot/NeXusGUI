@@ -187,19 +187,11 @@ class FileFilterApp:
             return []
 
         # Read the extension and filename filters from session state
-        extension_filter = st.session_state.get("extension_filter", "All")
+        ext_filter = st.session_state.get("extension_filter", "All")
         file_filter = st.session_state.get("file_filter", "").strip()  # Strip spaces
 
-        # Retrieve all files in the directory
-        files = [f.name for f in path.iterdir() if f.is_file()]
-
-        # Apply extension filter
-        if extension_filter == "All":
-            valid_extensions = (".fio", ".nxs")
-        else:
-            valid_extensions = (extension_filter,)
-
-        files = [f for f in files if f.endswith(valid_extensions)]
+        valid_extensions = (".fio", ".nxs") if ext_filter == "All" else (ext_filter,)
+        files = [f.name for f in path.iterdir() if f.suffix in valid_extensions]
 
         # Apply filename filtering (supports numbers)
         if file_filter:
