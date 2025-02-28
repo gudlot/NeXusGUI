@@ -11,8 +11,8 @@ import h5py
 from nexus_processing import NeXusBatchProcessor
 from fio_processing import FioBatchProcessor
 
-
-
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="st_aggrid")
 
 
 # Set up logging
@@ -231,7 +231,6 @@ class FileFilterApp:
         if nxs_metadata is not None and fio_metadata is not None:
             logger.debug(f"NXS Metadata Schema: {nxs_metadata.schema}")
             logger.debug(f"FIO Metadata Schema: {fio_metadata.schema}")
-            logger.debug(f"Shortly before pl.concat")
             combined_metadata = pl.concat([nxs_metadata, fio_metadata])
         elif nxs_metadata is not None:
             combined_metadata = nxs_metadata
@@ -242,11 +241,10 @@ class FileFilterApp:
             return
         
         # Debugging: Print lengths of filtered_files and combined_metadata
-        logger.debug('nxs_metadata ', nxs_metadata)
-        logger.debug('fio_metadata ', fio_metadata)
-        
-        logger.debug(f"Filtered files: {len(filtered_files)}")
-        logger.debug(f"Combined metadata rows: {len(combined_metadata)}")
+        #logger.debug('nxs_metadata ', nxs_metadata)
+        #logger.debug('fio_metadata ', fio_metadata)
+        #logger.debug(f"Filtered files: {len(filtered_files)}")
+        #logger.debug(f"Combined metadata rows: {len(combined_metadata)}")
 
         
 
@@ -260,24 +258,28 @@ class FileFilterApp:
             pl.col("filename").is_in(filtered_files)
         )
 
-        # Recompute last modified timestamps for the now-filtered files
-        last_modified_values = [
-            datetime.fromtimestamp(Path(self.path, f).stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        # Recompute creation timestamps for the now-filtered files
+        created_values = [
+            datetime.fromtimestamp(Path(self.path, f).stat().st_ctime).strftime('%Y-%m-%d %H:%M:%S')
             for f in filtered_files if Path(self.path, f).exists()
         ]
 
         # Ensure length consistency
-        if len(last_modified_values) != len(combined_metadata):
-            raise ValueError(f"Mismatch: combined_metadata ({len(combined_metadata)}) vs last_modified_values ({len(last_modified_values)})")
+        if len(created_values) != len(combined_metadata):
+            raise ValueError(f"Mismatch: combined_metadata ({len(combined_metadata)}) vs created_values ({len(created_values)})")
 
-        # Add "Last Modified" column safely
+        # Add "Created" column safely
         combined_metadata = combined_metadata.with_columns([
-            pl.Series("Last Modified", last_modified_values)
+            pl.Series("Created", created_values)
         ])
 
 
         # Sort by filename
-        combined_metadata = combined_metadata.sort("filename")
+        #combined_metadata = combined_metadata.sort("filename")
+        #Sort by scan_id
+        combined_metadata = combined_metadata.with_columns(
+        pl.col("scan_id").cast(pl.Int64, strict=False)  # Convert to integer if possible
+    ).sort("scan_id")
         
         # **Compute optimal column widths before converting to Pandas**
         column_widths = self.compute_optimal_column_widths(combined_metadata)
@@ -293,7 +295,7 @@ class FileFilterApp:
         for col, width in column_widths.items():
             gb.configure_column(col, width=width, wrapText=True, autoHeight=True)
         gb.configure_selection(selection_mode="multiple", use_checkbox=True)  # Enable checkboxes
-        gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=10)  # Enable pagination
+        gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=20)  # Enable pagination
         grid_options = gb.build()
         grid_options["defaultColDef"] = {
                             "cellStyle": {"font-size": "10px"}  # Set the font size here
@@ -306,20 +308,31 @@ class FileFilterApp:
         # Debugging: Log detailed grid response
         logger.debug("Grid Response Data: %s", grid_response.data)
         logger.debug("Grid Selected Rows: %s", grid_response.selected_rows)
+        
+        # Debugging: Log detailed grid response before validation
+        logger.debug(f"Grid Response Keys: {list(grid_response.keys()) if grid_response else 'None'}")
+        logger.debug(f"Grid Response Data: {grid_response}")
+        logger.debug(f"Selected Rows Content: {grid_response['selected_rows']}")
+        logger.debug(f'type {type(grid_response['selected_rows'])}')
 
         # Ensure grid_response is valid before proceeding
-        # Ensure grid_response is valid before proceeding
-        if not grid_response or not isinstance(grid_response.get("selected_rows"), list):
+        #Explanation:
+        #not grid_response: Ensures grid_response exists.
+        #"selected_rows" not in grid_response: Checks that "selected_rows" is a valid key.
+        #grid_response["selected_rows"] is None: Ensures it is not None.
+        #grid_response["selected_rows"].empty: Ensures it is not an empty DataFrame.
+        if not grid_response or "selected_rows" not in grid_response or grid_response["selected_rows"] is None or grid_response["selected_rows"].empty:
             st.warning("No selection data available.")
             self.selected_files = []
             return
 
-        # Assign selected filenames, ensuring it's always a list
+        # Update selected files safely
         #self.selected_files = [row["Filename"] for row in grid_response["selected_rows"] if "Filename" in row]
+        self.selected_files = grid_response["selected_rows"]["filename"].tolist()
 
-        # Update selected files
-        self.selected_files = [row["Filename"] for row in grid_response["selected_rows"]]
-                        
+        # Debugging: Verify selected files
+        logger.debug("\N{hot pepper}")
+        logger.debug(f'Selected files: {self.selected_files}')
   
     def _get_filtered_files(self):
         """Returns a list of .fio or .nxs files in the directory that match the filters."""
@@ -346,25 +359,127 @@ class FileFilterApp:
             files = [f for f in files if re.search(regex_pattern, f, re.IGNORECASE)]
             
         return files
+    
+    @staticmethod
+    @st.cache_data
+    def _get_column_names(selected_files, path):
+        column_names = {}
+
+        if selected_files:
+            nxs_files = [f for f in selected_files if f.endswith(".nxs")]
+            fio_files = [f for f in selected_files if f.endswith(".fio")]
+
+            if nxs_files:
+                nexus_processor = NeXusBatchProcessor(path)
+                df_nxs = nexus_processor.get_lazy_dataframe(nxs_files)
+                #The |= operator in Python is a shorthand for merging dictionaries, introduced in Python 3.9.
+                # It is functionally equivalent to dict.update() but preserves ordering.
+                column_names |= {col: None for col in df_nxs.schema.keys()}
+
+            if fio_files:
+                fio_processor = FioBatchProcessor(path)
+                df_fio = fio_processor.get_dataframe(fio_files)
+                column_names |= {col: None for col in df_fio.columns}
+
+        return column_names  # Ensuring order is preserved
+
 
     def _render_plot_options(self):
         st.header("Plot Options")
 
         if self.selected_files:
-            # Example: Allow selecting time or motor vs signal
-            x_axis = st.selectbox("Select X-axis:", ["Time", "Motor"])
-            y_axis = st.selectbox("Select Y-axis:", ["Signal1", "Signal2"])
-            normalize = st.checkbox("Normalize data")
+            time_column = "/scan/data/epoch"
+            time_options = [f"{time_column} (Unix)", f"{time_column} (Datetime)"]
+
+            # Pass required arguments to the static method
+            column_names = self._get_column_names(self.selected_files, self.path)
+            column_names.pop(time_column, None)  # Remove time_column directly
+
+            col1, col2 = st.columns([3, 1])
+
+            with col1:
+                x1 = st.selectbox("Select X1 (Time):", time_options, key="x1")
+                x2 = st.selectbox("Select X2:", list(column_names.keys()), key="x2")
+                y1 = st.selectbox("Select Y1-axis:", list(column_names.keys()), key="y1")
+                z = st.selectbox("Select Normalization Column:", list(column_names.keys()), key="z")
+
+            with col2:
+                x1_radio = st.radio("", ["Use", "Ignore"], key="x1_radio")
+                x2_radio = st.radio("", ["Use", "Ignore"], key="x2_radio")
+                y1_radio = st.radio("", ["Use", "Ignore"], key="y1_radio")
+                z_radio = st.radio("", ["Use", "Ignore"], key="z_radio", index=1)  # Default to Ignore
+
+            normalize = st.checkbox("Normalize data", value=False)
 
             if st.button("Plot"):
-                self._plot_data(x_axis, y_axis, normalize)
+                x_axis = x1 if x1_radio == "Use" else (x2 if x2_radio == "Use" else None)
+                y_axis = y1 if y1_radio == "Use" else None
+                z_axis = z if z_radio == "Use" else None
 
-    def _plot_data(self, x_axis, y_axis, normalize):
-        """Simulates plotting logic."""
-        st.write(f"Plotting {x_axis} vs {y_axis} with normalization: {normalize}")
-        # Here you would add your actual plotting logic using libraries like matplotlib or plotly
-        # For now, we'll just display a placeholder
-        st.write("Plot placeholder")
+                if not x_axis or not y_axis:
+                    st.error("You must select either X1 or X2 and Y1 for plotting.")
+                    return
+
+                self._plot_data(x_axis, y_axis, z_axis, normalize)
+
+
+
+
+    def plot_data(selected_files, combined_metadata, x_column, y_columns, z_column=None):
+        """
+        Plots data based on selected files and column types.
+        
+        Parameters:
+        - selected_files: List of selected file indices.
+        - combined_metadata: DataFrame containing metadata.
+        - x_column: Column name for x-axis.
+        - y_columns: List of column names for y-axis.
+        - z_column: Optional column for normalization.
+        """
+        
+        # Ensure selected files are sorted by scan_id if possible
+        try:
+            combined_metadata = combined_metadata.sort_values("scan_id", key=lambda x: x.astype(int))
+        except ValueError:
+            logging.warning("scan_id could not be converted to integers. Sorting lexicographically.")
+            combined_metadata = combined_metadata.sort_values("scan_id")
+        
+        # Assign markers and colors
+        markers = {i: marker for i, marker in zip(selected_files, itertools.cycle(['o', 's', 'D', '^', 'v', '<', '>']))}
+        colors = {i: color for i, color in zip(selected_files, itertools.cycle(plt.cm.tab10.colors))}
+        
+        plt.figure(figsize=(10, 6))
+        
+        for idx in selected_files:
+            row = combined_metadata.iloc[idx]
+            x_data = row[x_column]
+            
+            if isinstance(x_data, str) or np.isscalar(x_data):
+                x_data = np.array([x_data])  # Broadcast scalars/strings
+            
+            for y_column in y_columns:
+                y_data = row[y_column]
+                
+                if isinstance(y_data, str) or np.isscalar(y_data):
+                    y_data = np.full_like(x_data, y_data, dtype=object)  # Broadcast scalars
+                
+                if isinstance(y_data, np.ndarray):
+                    if y_data.ndim == 1:
+                        plt.plot(x_data, y_data, marker=markers[idx], color=colors[idx], label=f"{row['filename']} - {y_column}")
+                    elif y_data.ndim == 2:
+                        logging.debug(f"2D data detected in {y_column}. Using imshow.")
+                        plt.figure()
+                        plt.imshow(y_data, aspect='auto', cmap='viridis')
+                        plt.colorbar(label=y_column)
+                        plt.title(f"{row['filename']} - {y_column}")
+                        plt.show()
+                
+        plt.xlabel(x_column)
+        plt.ylabel(", ".join(y_columns))
+        plt.legend()
+        plt.title("Data Plot")
+        plt.show()
+
 
     def _render_right_column(self):
         st.header("Plotting Area")
@@ -374,6 +489,22 @@ class FileFilterApp:
         else:
             st.write("No data to plot yet.")
             
+ 
+    def _process_time_column(self, column: str):
+        if column == "/scan/data/epoch (Datetime)":
+            return self._convert_unix_to_datetime("/scan/data/epoch")
+        return column
+
+    def _convert_unix_to_datetime(self, column: str):
+        for file in self.selected_files:
+            if file.endswith(".nxs"):
+                processor = NexusProcessor(file)
+                df = processor.get_dataframe()
+                if column in df.columns:
+                    df = df.with_columns(pl.col(column).map(lambda x: datetime.datetime.utcfromtimestamp(x)))
+                return df.columns
+        return column
+ 
  
 
 if __name__ == "__main__":
