@@ -274,8 +274,13 @@ if __name__ == "__main__":
     
     df_lazy= processor.get_lazy_dataframe()
     print(df_lazy.head())
-       
     
+    print(100*"\N{hot pepper}")
+       
+    #print(df_lazy.collect_schema().names)
+    for col_name in df_lazy.schema:
+        print(col_name)
+     
     
     # Print the structure list (optional, for debugging)
     #print("\nStructure List:")
@@ -302,3 +307,15 @@ if __name__ == "__main__":
             print("Dataset Dtype:", dataset.dtype)
             print("Dataset Value:", dataset[()])
             print("Dataset Attributes:", dict(dataset.attrs))
+
+    print(100*"\N{hot pepper}")
+
+    with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as h5file:
+        print(type(h5file["/scan/data"]))
+        print(h5file["/scan/data"].name)
+        print(h5file["/scan/data"].file.filename)
+
+    with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as f:
+        scan_data_group = f["/scan/data"]
+        print("Keys in /scan/data:", list(scan_data_group.keys()))  # Check contents
+        print("Attributes:", dict(scan_data_group.attrs))  # Check if datasets are stored as attributes

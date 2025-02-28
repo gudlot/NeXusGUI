@@ -1,7 +1,7 @@
 import streamlit as st
 from st_keyup import st_keyup
 from pathlib import Path
-import os
+from datetime import datetime
 import polars as pl
 import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder
@@ -142,6 +142,65 @@ class FileFilterApp:
         st.session_state["file_filter"] = st.session_state.get("file_filter", "")
         st.session_state["extension_filter"] = st.session_state.get("extension_filter", "")
         st.re_run()
+        
+    @staticmethod    
+    def compute_optimal_column_widths(
+        df: pl.DataFrame, 
+        char_width: int = 9, 
+        min_width: int = 100, 
+        max_width: int = 800,
+        default_buffer: float = 1.05,  # Default buffer for most columns
+        filename_buffer: float = 1.2,  # Larger buffer for filename (checkboxes)
+        scan_id_extra_padding: int = 48  # Extra padding for scan_id to avoid squeeze
+    ) -> dict[str, int]:
+        """
+        Compute optimal column widths dynamically based on content length and column headers.
+
+        Parameters:
+        - df (pl.DataFrame): The Polars DataFrame containing the data.
+        - char_width (int): Approximate pixel width per character.
+        - min_width (int): Minimum column width.
+        - max_width (int): Maximum column width.
+        - default_buffer (float): Buffer for most columns (default: 1.05).
+        - filename_buffer (float): Larger buffer for filename (default: 1.2).
+        - scan_id_extra_padding (int): Extra pixels for scan_id to avoid squeezing.
+
+        Returns:
+        - dict: A dictionary mapping column names to optimal widths.
+        """
+        if df.is_empty():
+            return {}
+
+        col_widths = {}
+
+        for col in df.columns:
+            # Compute max string length directly in Polars (ignoring nulls)
+            max_str_len = df[col].drop_nulls().cast(pl.Utf8).str.len_chars().max()
+
+            # Ensure column header is also considered for width
+            max_data_len = max(len(col), max_str_len)
+
+            # Apply specific buffer factors
+            if col.lower() == "filename":
+                buffer = filename_buffer  # Larger buffer for filename (checkboxes)
+            else:
+                buffer = default_buffer  # Default buffer for all other columns
+
+            # Special handling for 'scan_id': ensure column title is fully visible
+            if col.lower() == "scan_id":
+                max_data_len = max(max_data_len, len("scan_id"))  # Ensure header fits
+                optimal_width = min(max(min_width, int(char_width * max_data_len * buffer) + scan_id_extra_padding), max_width)
+            else:
+                optimal_width = min(max(min_width, int(char_width * max_data_len * buffer)), max_width)
+
+            col_widths[col] = optimal_width
+
+        logger.debug(f"Computed column widths: {col_widths}")
+        return col_widths
+
+
+
+
             
         
     def _render_selectable_table(self, filtered_files):
@@ -149,27 +208,90 @@ class FileFilterApp:
         if not filtered_files:
             st.write("No files match the filter.")
             return
-        # Find the longest filename length
-        max_filename_length = max(len(f) for f in filtered_files) if filtered_files else 60
+        
+    
+        # Determine file types
+        nxs_files = [f for f in filtered_files if f.endswith(".nxs")]
+        fio_files = [f for f in filtered_files if f.endswith(".fio")]
+        logger.debug(f"NXS files : {len(nxs_files)}")
+        logger.debug(f"Fio files : {len(fio_files )}")
+        logger.debug(f"Filtered files : {filtered_files}")
 
-        # Approximate width based on character count (10 pixels per character)
-        estimated_width = max(600, min(10 * max_filename_length, 800))  # Min 600px, Max 800px
+        # Fetch metadata for .nxs files
+        nxs_metadata = None
+        if nxs_files:
+            nxs_metadata = self.nexus_processor.get_core_metadata().collect()
+
+        # Fetch metadata for .fio files
+        fio_metadata = None
+        if fio_files:
+            fio_metadata = self.fio_processor.get_core_metadata()
+        
+        # Combine metadata into a single DataFrame
+        if nxs_metadata is not None and fio_metadata is not None:
+            logger.debug(f"NXS Metadata Schema: {nxs_metadata.schema}")
+            logger.debug(f"FIO Metadata Schema: {fio_metadata.schema}")
+            logger.debug(f"Shortly before pl.concat")
+            combined_metadata = pl.concat([nxs_metadata, fio_metadata])
+        elif nxs_metadata is not None:
+            combined_metadata = nxs_metadata
+        elif fio_metadata is not None:
+            combined_metadata = fio_metadata
+        else:
+            st.warning("No selection data available.")
+            return
+        
+        # Debugging: Print lengths of filtered_files and combined_metadata
+        logger.debug('nxs_metadata ', nxs_metadata)
+        logger.debug('fio_metadata ', fio_metadata)
+        
+        logger.debug(f"Filtered files: {len(filtered_files)}")
+        logger.debug(f"Combined metadata rows: {len(combined_metadata)}")
+
+        
+
+        # Debugging: Print filtered_files_for_metadata
+        logger.debug(f"filtered_files: {filtered_files}")
+        logger.debug(f"metadata_filenames: {combined_metadata['filename'].to_list()}")
+        
+
+        # Ensure combined_metadata contains only relevant filenames
+        combined_metadata = combined_metadata.filter(
+            pl.col("filename").is_in(filtered_files)
+        )
+
+        # Recompute last modified timestamps for the now-filtered files
+        last_modified_values = [
+            datetime.fromtimestamp(Path(self.path, f).stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            for f in filtered_files if Path(self.path, f).exists()
+        ]
+
+        # Ensure length consistency
+        if len(last_modified_values) != len(combined_metadata):
+            raise ValueError(f"Mismatch: combined_metadata ({len(combined_metadata)}) vs last_modified_values ({len(last_modified_values)})")
+
+        # Add "Last Modified" column safely
+        combined_metadata = combined_metadata.with_columns([
+            pl.Series("Last Modified", last_modified_values)
+        ])
 
 
-        # Create a Polars DataFrame with additional metadata
-        df = pl.DataFrame({
-            "Filename": filtered_files,
-            "Size (KB)": [round(Path(self.path, f).stat().st_size / 1024, 2) for f in filtered_files],
-            "Last Modified": [Path(self.path, f).stat().st_mtime for f in filtered_files]
-        }).sort("Filename")
+        # Sort by filename
+        combined_metadata = combined_metadata.sort("filename")
+        
+        # **Compute optimal column widths before converting to Pandas**
+        column_widths = self.compute_optimal_column_widths(combined_metadata)
+        
 
         # Convert Polars DataFrame to Pandas (st_aggrid requires Pandas)
-        df_pd = df.to_pandas()
+        df_pd = combined_metadata.to_pandas()
+        
+        logger.debug(f"Columns before AgGrid: {df_pd.columns.tolist()}")
 
         # Configure AgGrid options
         gb = GridOptionsBuilder.from_dataframe(df_pd)
-        # Set column width for Filename to be large enough
-        gb.configure_column("Filename", width=estimated_width, wrapText=True, autoHeight=True)
+        for col, width in column_widths.items():
+            gb.configure_column(col, width=width, wrapText=True, autoHeight=True)
         gb.configure_selection(selection_mode="multiple", use_checkbox=True)  # Enable checkboxes
         gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=10)  # Enable pagination
         grid_options = gb.build()
@@ -193,8 +315,10 @@ class FileFilterApp:
             return
 
         # Assign selected filenames, ensuring it's always a list
-        self.selected_files = [row["Filename"] for row in grid_response["selected_rows"] if "Filename" in row]
+        #self.selected_files = [row["Filename"] for row in grid_response["selected_rows"] if "Filename" in row]
 
+        # Update selected files
+        self.selected_files = [row["Filename"] for row in grid_response["selected_rows"]]
                         
   
     def _get_filtered_files(self):
