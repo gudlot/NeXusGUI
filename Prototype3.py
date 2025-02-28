@@ -8,6 +8,9 @@ from st_aggrid import AgGrid, GridOptionsBuilder
 import logging
 import re
 import h5py 
+from nexus_processing import NeXusBatchProcessor
+from fio_processing import FioBatchProcessor
+
 
 
 
@@ -78,6 +81,9 @@ class FileFilterApp:
         self.selected_files = []
         self.plot_data = {}
         self.processed_data = {}
+        self.nexus_processor = NeXusBatchProcessor(self.path)
+        self.fio_processor = FioBatchProcessor(self.path)
+    
 
     def run(self):
         st.title("NeXus-Fio-File Plotting App")
@@ -90,6 +96,8 @@ class FileFilterApp:
 
         with col2:
             self._render_right_column()
+            
+            
 
     def _render_left_column(self):
         st.header("File Selection")
@@ -102,6 +110,8 @@ class FileFilterApp:
         
         if st.button("Force Reload"):
             st.cache_data.clear()
+            self.nexus_processor.process_files(force_reload=True)
+            self.fio_processor.process_files(force_reload=True)
             self.processed_data.clear()
             st.rerun()
 
@@ -131,7 +141,7 @@ class FileFilterApp:
         """Updates session state to trigger a rerun when filters change."""
         st.session_state["file_filter"] = st.session_state.get("file_filter", "")
         st.session_state["extension_filter"] = st.session_state.get("extension_filter", "")
-
+        st.re_run()
             
         
     def _render_selectable_table(self, filtered_files):
@@ -176,14 +186,16 @@ class FileFilterApp:
         logger.debug("Grid Selected Rows: %s", grid_response.selected_rows)
 
         # Ensure grid_response is valid before proceeding
-        if grid_response is None or "selected_rows" not in grid_response:
+        # Ensure grid_response is valid before proceeding
+        if not grid_response or not isinstance(grid_response.get("selected_rows"), list):
             st.warning("No selection data available.")
             self.selected_files = []
             return
 
-        # Ensure selected_rows is always a list before processing
-        selected_rows = grid_response.get("selected_rows", []) # Always a list (default empty list)
-            
+        # Assign selected filenames, ensuring it's always a list
+        self.selected_files = [row["Filename"] for row in grid_response["selected_rows"] if "Filename" in row]
+
+                        
   
     def _get_filtered_files(self):
         """Returns a list of .fio or .nxs files in the directory that match the filters."""
@@ -202,7 +214,8 @@ class FileFilterApp:
         # Apply filename filtering (supports numbers)
         if file_filter:
             if file_filter.isdigit():  # If only numbers are entered, match scan number
-                regex_pattern = rf"\D{file_filter}\D"  # Ensures number isn't part of another number
+                #regex_pattern = rf"\D{file_filter}\D"  # Ensures number isn't part of another number
+                regex_pattern= rf"(?<!\d){file_filter}(?!\d)"
             else:
                 regex_pattern = re.escape(file_filter).replace(r"\*", ".*").replace(r"\?", ".")
             
