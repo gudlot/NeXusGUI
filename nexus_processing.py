@@ -44,7 +44,7 @@ class NeXusProcessor:
     def process(self) -> dict:
         """Extracts data and returns it as a structured dictionary."""
         try:
-            with h5py.File(self.file_path, 'r') as f:
+            with h5py.File(self.file_path, 'r', libver="latest") as f:
                 nx_entry, nx_entry_path = self.find_nxentry(f)
                 if nx_entry is None:
                     logging.warning(f"Skipping file {self.file_path}: No NXentry found.")
@@ -61,62 +61,78 @@ class NeXusProcessor:
         return self.to_dict()
     
     
-    def _extract_datasets(self, nx_entry: h5py.Group, nx_entry_path:str):
+    def _extract_datasets(self, nx_entry: h5py.Group, nx_entry_path: str):
         """Extracts datasets and their attributes into data_dict and structure_dict."""
         def process_item(name: str, obj):
-            """Processes each object using visititems() and builds structure."""
             path = f"{nx_entry_path}/{name}"
+            #print(f"Processing: {path}, Type: {type(obj)}")
 
             # Build hierarchical structure dictionary
             levels = path.strip("/").split("/")
             sub_dict = self.structure_dict
-            for level in levels[:-1]:  
+            for level in levels[:-1]:
                 sub_dict = sub_dict.setdefault(level, {})
 
-            # Mark groups and datasets explicitly
             if isinstance(obj, h5py.Group):
+                # Store group structure
                 sub_dict[levels[-1]] = {"type": "group", "children": {}}
-            else:
-                sub_dict[levels[-1]] = {"type": "dataset", "shape": obj.shape, "dtype": str(obj.dtype)}
 
-            if isinstance(obj, h5py.Dataset):
+                # Handle NXdata groups explicitly
+                nx_class = obj.attrs.get("NX_class", "")
+                if isinstance(nx_class, bytes):
+                    nx_class = nx_class.decode()
+                
+                if nx_class == "NXdata":
+                    # Extract the 'signal' dataset if defined
+                    signal = obj.attrs.get("signal", None)
+                    if isinstance(signal, bytes):
+                        signal = signal.decode()
+
+                    if signal and signal in obj:
+                        dataset = obj[signal]
+                        self._store_dataset(f"{path}/{signal}", dataset)
+
+                    # Ensure all datasets inside NXdata are stored
+                    for dataset_name in obj.keys():
+                        dataset_path = f"{path}/{dataset_name}"
+                        dataset = obj[dataset_name]
+                        if isinstance(dataset, h5py.Dataset):
+                            self._store_dataset(dataset_path, dataset)
+
+            elif isinstance(obj, h5py.Dataset):
+                # Store dataset information
+                sub_dict[levels[-1]] = {"type": "dataset", "shape": obj.shape, "dtype": str(obj.dtype)}
                 self._store_dataset(path, obj)
 
-        # Process all datasets first
         nx_entry.visititems(process_item)
 
-        
-        #print(f"Data dictionary after scan metadata extraction:\n {self.data_dict}\n")    
 
 
     def _store_dataset(self, path: str, obj: h5py.Dataset):
         """Efficiently stores dataset values and unit information in data_dict."""
-        
+
         shape = obj.shape
         dtype = obj.dtype
-        
-        # Efficient handling of different data types
-        if dtype.kind in {"U", "S"}:  # Unicode or byte strings
-            value = obj.asstr()[()]
-        elif shape == () or obj.size == 1:  # Scalar datasets
-            value = obj[()]
-        else:
-            value = obj  #Stores the reference to the dataset (obj) instead of immediately loading it 
 
-        #TODO:
-        # Store reference to dataset for all cases (no eager loading)
-        #value = obj if dtype.kind not in {"U", "S"} else obj.asstr()[()]
+        try:
+            # Efficient handling of different data types
+            if dtype.kind in {"U", "S"}:  # Unicode or byte strings
+                value = obj.asstr()[()]
+            elif shape == () or obj.size == 1:  # Scalar datasets
+                value = obj[()]
+            else:
+                value = obj  # Stores the reference to the dataset (obj) instead of immediately loading it 
 
+            # Store in data_dict
+            self.data_dict[path] = {"value": value}
 
-        # Store in data_dict
-        self.data_dict[path] = {"value": value}
-        
-        # Add unit if available
-        unit = obj.attrs.get("unit", None)  
-        if unit is not None:
-            self.data_dict[path]["unit"] = unit
+            # Add unit if available
+            unit = obj.attrs.get("unit", None)
+            if unit is not None:
+                self.data_dict[path]["unit"] = unit
 
-
+        except OSError as e:
+            logging.error(f"Skipping dataset {path} in {self.file_path} due to broken external link: {e}")
 
 
 
@@ -213,16 +229,19 @@ class NeXusBatchProcessor(BaseProcessor):
             processor = NeXusProcessor(str_path)
             file_data = processor.process()
             
-            if file_data:
-                # Add human-readable time if 'epoch' is present
-                file_data = self._add_human_readable_time(file_data)
-                
-                # Add filename (stripped of path) to the file_data dictionary
-                file_data = self._add_filename(file_data, file_path)
+            if not file_data:
+                logging.warning(f"Skipping {str_path} due to broken external links or missing data.")
+                continue  # Ignore files with broken links
+            
+            # Add human-readable time if 'epoch' is present
+            file_data = self._add_human_readable_time(file_data)
+            
+            # Add filename (stripped of path) to the file_data dictionary
+            file_data = self._add_filename(file_data, file_path)
 
-                # Cache the processed data
-                self.processed_files[str_path] = file_data
-                self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
+            # Cache the processed data
+            self.processed_files[str_path] = file_data
+            self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
 
         # Update cached DataFrame only if there is processed data
         if self.processed_files:
@@ -264,7 +283,8 @@ class NeXusBatchProcessor(BaseProcessor):
 if __name__ == "__main__":
     
     # Initialize the NeXusBatchProcessor with the directory containing .nxs files
-    processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
+    #processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
+    processor = NeXusBatchProcessor("/Users/lotzegud/P08/test_folder/")
     
     # Process the files and get the DataFrame
     #df = processor.get_dataframe()
@@ -281,6 +301,8 @@ if __name__ == "__main__":
     for col_name in df_lazy.schema:
         print(col_name)
      
+    df= processor.get_dataframe()
+    print(df.head())
     
     # Print the structure list (optional, for debugging)
     #print("\nStructure List:")
@@ -319,3 +341,30 @@ if __name__ == "__main__":
         scan_data_group = f["/scan/data"]
         print("Keys in /scan/data:", list(scan_data_group.keys()))  # Check contents
         print("Attributes:", dict(scan_data_group.attrs))  # Check if datasets are stored as attributes
+
+
+
+    
+    print(100*"\N{pineapple}")
+
+    try:
+        with h5py.File("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs", "r", libver="latest") as f:
+            print("File opened successfully.")
+            print("Keys:", list(f.keys()))
+    except Exception as e:
+        print(f"Error opening file: {e}")
+
+
+    with h5py.File("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs", "r") as f: 
+        scan_data_group = f["/scan/data"]
+        print("Keys in /scan/data:", list(scan_data_group.keys()))  # Check contents
+        print("Attributes:", dict(scan_data_group.attrs))  # Check if datasets are stored as attributes
+
+
+    print(100*"\N{banana}")
+    
+    
+    sproc=NeXusProcessor("/Users/lotzegud/P08/test_folder/h2o_2024_10_16_01116.nxs")
+    res= sproc._extract_scan_metadata("/scan","h2o_2024_10_16_01116.nxs")
+    
+    print(res)
