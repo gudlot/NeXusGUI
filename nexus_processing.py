@@ -406,16 +406,20 @@ class NeXusBatchProcessor(BaseProcessor):
         return self._df.lazy().select(["filename", "scan_id", "scan_command"])
 
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
-        """Return the processed data as a fully loaded Polars DataFrame."""
-        
+        """Return the processed data as a Polars DataFrame with evaluated datasets."""
         self.process_files(force_reload)
 
         def resolve_lazy(value):
-            """Helper function to resolve deferred datasets when accessed."""
-            return value["lazy"]() if isinstance(value, dict) and "lazy" in value else value
+            """Helper function to evaluate lazy datasets properly."""
+            if isinstance(value, dict):
+                if "lazy" in value:
+                    return value["lazy"]()  # Resolve lazy dataset
+                if "source" in value:
+                    return f"Reference: {value['source']}"  # Keep soft link as reference
+            return value  # Return normal value
 
         return pl.DataFrame([
-            {k: resolve_lazy(v) for k, v in file_data.items()}  # Force evaluation
+            {k: resolve_lazy(v) for k, v in file_data.items()}
             for file_data in self.processed_files.values()
         ])
 
@@ -434,11 +438,32 @@ class NeXusBatchProcessor(BaseProcessor):
     
     
     def evaluate_lazy_column(self, df: pl.DataFrame, column_name: str) -> pl.Series:
-        """Evaluate a specific lazy-loaded column when needed."""
-        #df = processor.get_dataframe()
-        #df = df.with_columns(processor.evaluate_lazy_column(df, "/scan/data/lambda_roi1"))  # Load specific dataset
+        """Evaluate a specific lazy-loaded column when needed.
+        
+        # Step 1: Load DataFrame
+        df = processor.get_dataframe()  
 
-        return df[column_name].apply(lambda x: x["lazy"]() if isinstance(x, dict) and "lazy" in x else x)
+        # Step 2: Evaluate specific lazy dataset column
+        df = df.with_columns(processor.evaluate_lazy_column(df, "/scan/data/lambda_roi1"))
+
+        # Step 3: Print results
+        print(df.select("/scan/data/lambda_roi1"))
+        
+        """
+        
+        if column_name not in df.columns:
+            raise ValueError(f"Column '{column_name}' not found in DataFrame.")
+
+        def resolve_value(value):
+            """Helper function to resolve lazy datasets and handle soft links."""
+            if isinstance(value, dict):
+                if "lazy" in value:
+                    return value["lazy"]()  # Evaluate dataset
+                if "source" in value:
+                    return f"Reference: {value['source']}"  # Keep soft link as reference
+            return value  # Return normal values directly
+        
+        return df[column_name].apply(resolve_value)
 
     
     def get_structure_list(self, force_reload: bool = False):
