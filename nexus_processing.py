@@ -6,7 +6,7 @@ import logging
 from functools import lru_cache
 from typing import Optional, Tuple, Dict, Any
 from base_processing import BaseProcessor
-
+from functools import partial
 import traceback
 
 # Configure the logger
@@ -63,6 +63,14 @@ class NeXusProcessor:
                 
                 self._extract_datasets(nx_entry)
                 
+                
+                print(100*"\N{rainbow}")
+                print(100*"\N{peacock}")
+                for key in self.data_dict: 
+                    print(key)
+                print(100*"\N{peacock}")
+                print(100*"\N{rainbow}")
+                    
                                 
                 print(100*"\N{cherries}")
                 scan_metadata = self._extract_scan_metadata(nx_entry)
@@ -90,87 +98,82 @@ class NeXusProcessor:
         try:
             with h5py.File(self.file_path, "r") as f:
                 dataset = f[path]
-                return dataset[:]  # Load only when accessed
-        except Exception as e:
-            logging.warning(f"Failed to resolve dataset at {path}: {e}")
-            return None
-    
-    def _extract_datasets(self, nx_entry: h5py.Group):
-        """Extracts datasets and their attributes into data_dict and structure_dict, handling broken external links."""
-        
-        def process_item(name: str, obj):
-            print(30 * "\N{peacock}")  # Confirm execution
+                return dataset[:]  # Load on-demand
+        except KeyError:
+            logging.warning(f"Dataset path not found: {path}")
+        except OSError as e:
+            logging.warning(f"Failed to access dataset at {path}: {e}")
+        return None  # Ensure it returns None if resolution fails
 
+   
+
+    def _extract_datasets(self, nx_entry: h5py.Group):
+        """Extracts datasets, preserving hierarchy and handling soft & external links."""
+
+        def process_item(name: str, obj):
             path = f"{self.nx_entry_path}/{name}"
-            print(f"DEBUG: Processing {path}")  # Log path being processed
+            print(f"DEBUG: Processing {path}")
 
             try:
-                if isinstance(obj, h5py.SoftLink):
-                    # Soft link found, store it as a lazy reference
-                    target_path = obj.path
-                    print(f"DEBUG: Found soft link {path} -> {target_path}")
+                if isinstance(obj, h5py.Dataset):
+                    print(f"DEBUG: Found Dataset - {path}")
+                    self._store_dataset(path, obj)
 
-                    # Store as a lazy reference, without separate "source" key
-                    self.data_dict[path] = {
-                        "lazy": lambda: self._resolve_lazy_dataset(target_path)
-                    }               
-                
                 elif isinstance(obj, h5py.Group):
-                    print(f"DEBUG: Found Group - {path}")  # Log group processing
-
-                    nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", ""), bytes) else obj.attrs.get("NX_class", "")
-                    print(f"DEBUG: NX_class = {nx_class}")  # Log NX_class
+                    print(f"DEBUG: Found Group - {path}")
+                    nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", bytes)) else obj.attrs.get("NX_class", "")
 
                     if nx_class == "NXdata":
                         signal = obj.attrs.get("signal", None)
                         if isinstance(signal, bytes):
                             signal = signal.decode()
 
-                        print(f"DEBUG: Signal dataset = {signal}")  # Log signal dataset
+                        print(f"DEBUG: Signal dataset = {signal}")
 
-                        if signal:
+                        if signal and signal in obj:
                             dataset_path = f"{path}/{signal}"
-                            
-                            if signal in obj:
-                                try:
-                                    dataset = obj[signal]
-                                    
-                                    # 🔹 **Check if it's an external link**
-                                    if isinstance(dataset, h5py.ExternalLink):
-                                        external_file = dataset.filename
-                                        external_file_path = os.path.join(os.path.dirname(self.file_path), external_file)
+                            dataset = obj[signal]
 
-                                        if os.path.exists(external_file_path):
-                                            print(f"DEBUG: External link is valid: {external_file_path}")
-                                            # Attempt to open the linked dataset
-                                            try:
-                                                with h5py.File(external_file_path, "r") as ext_file:
-                                                    linked_dataset = ext_file[dataset.path]
-                                                    self._store_dataset(dataset_path, linked_dataset)
-                                            except Exception as e:
-                                                logging.warning(f"Skipping broken external link {dataset_path}: {e}")
-                                        else:
-                                            logging.warning(f"Skipping missing external link: {dataset_path} -> {external_file}")
+                            if isinstance(dataset, h5py.ExternalLink):
+                                # Handle external links correctly
+                                external_file = dataset.filename
+                                external_file_path = os.path.join(os.path.dirname(self.file_path), external_file)
 
-                                    elif isinstance(dataset, h5py.Dataset):
-                                        self._store_dataset(dataset_path, dataset)
+                                if os.path.exists(external_file_path):
+                                    print(f"DEBUG: External link is valid: {external_file_path}")
+                                    try:
+                                        with h5py.File(external_file_path, "r") as ext_file:
+                                            linked_dataset = ext_file[dataset.path]
+                                            self._store_dataset(dataset_path, linked_dataset)
+                                    except Exception as e:
+                                        logging.warning(f"Skipping broken external link {dataset_path}: {e}")
+                                else:
+                                    logging.warning(f"Skipping missing external link: {dataset_path} -> {external_file}")
 
-                                except OSError as e:
-                                    logging.warning(f"Skipping broken external link: {dataset_path} due to {e}")
+                            elif isinstance(dataset, h5py.Dataset):
+                                self._store_dataset(dataset_path, dataset)
                             else:
-                                logging.warning(f"Signal dataset '{signal}' not found in {path}")
+                                logging.warning(f"Signal dataset '{signal}' is neither a dataset nor an external link.")
 
-                elif isinstance(obj, h5py.Dataset):
-                    print(f"DEBUG: Found Dataset - {path}")  # Log dataset processing
-                    self._store_dataset(path, obj)
+                elif isinstance(obj, h5py.SoftLink):
+                    # Soft link found, store it as a lazy reference
+                    target_path = obj.path
+                    print(f"DEBUG: Found soft link {path} -> {target_path}")
 
-            except Exception as e:  # Catch ALL exceptions
-                logging.warning(f"Skipping {path} due to {e}")
+                    # Store soft link reference correctly using `partial`
+                    #self.data_dict[path] = {
+                    #    "source": target_path,
+                    #    "lazy": partial(self._resolve_lazy_dataset, target_path),
+                    #}
+                    self.data_dict[path] = {
+                        "lazy": partial(self._resolve_lazy_dataset, target_path)
+}
 
-        nx_entry.visititems(process_item)
+            except Exception as e:
+                logging.warning(f"Skipping {path} due to error: {e}")
 
-
-
+        # Use visititems_links to process **everything**, including soft links
+        nx_entry.visititems_links(process_item)
 
 
     def _store_dataset(self, path: str, obj: h5py.Dataset):
@@ -258,22 +261,21 @@ class NeXusProcessor:
         }
 
         for key, info in self.data_dict.items():
-            print(key, info)
-            
-            value = info.get("value")
-            unit = info.get("unit")  # May be None
+            print(key, info)  # Debugging statement to check stored values
 
-            if callable(value):  # If lazy-loaded, store reference instead of evaluating
-                result[key] = value  # Keeps it as a function for later resolution
+            if isinstance(info, dict):
+                if "lazy" in info:  
+                    result[key] = info["lazy"]  # Keep soft link as a lazy reference
+                elif "value" in info:
+                    result[key] = info["value"]  # Store immediate values
             else:
-                result[key] = value  # Store immediate values
+                result[key] = info  # Directly store other values (e.g., scalars, strings)
 
-            if unit is not None:
-                result[f"{key}_unit"] = unit
-
+            # Store unit if available
+            if isinstance(info, dict) and "unit" in info:
+                result[f"{key}_unit"] = info["unit"]
 
         return result
-   
 
 class NeXusBatchProcessor(BaseProcessor):
     def __init__(self, directory: str):
@@ -317,13 +319,7 @@ class NeXusBatchProcessor(BaseProcessor):
             processor = NeXusProcessor(str_path)
             file_data = processor.process()
             
-            print(100*"\N{rainbow}")
-            print(100*"\N{peacock}")
-            for key in file_data: 
-                print(key)
-            print(100*"\N{peacock}")
-            print(100*"\N{rainbow}")
-            
+                        
             if not file_data:
                 logging.warning(f"Skipping {str_path} due to broken external links or missing data.")
                 continue  # Ignore files with broken links
@@ -413,12 +409,18 @@ class NeXusBatchProcessor(BaseProcessor):
 if __name__ == "__main__":
     
     
+    
     file_path = Path("/Users/lotzegud/P08/healthy/nai_250mm_02290.nxs")
     print(f"File exists: {file_path.exists()}")
     print(f"Absolute path: {file_path.resolve()}")
         
+    sproc=NeXusProcessor("/Users/lotzegud/P08/healthy/nai_250mm_02290.nxs")
+    res= sproc.process()
+    
+    for key, value in res.items(): 
+        print(key, value)
         
-        
+    '''    
     #h5ls -r /Users/lotzegud/P08/healthy/nai_250mm_02290.nxs
     
     # Check if the file exists
@@ -459,3 +461,4 @@ if __name__ == "__main__":
     #df= processor.get_dataframe()
     #print(df.head())
  
+'''
