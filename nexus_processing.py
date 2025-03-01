@@ -56,26 +56,21 @@ class NeXusProcessor:
 
                 nx_entry, self.nx_entry_path = self.find_nxentry(f)
                 
-                print(100*"\N{rainbow}")
-                print(f"nx_entry path: {nx_entry.name}")  # Should be "/scan"
-                print(100*"\N{rainbow}")
-                
                 if nx_entry is None:
-                    logging.warning(f"Skipping file {self.file_path}: No NXentry found.")
+                    logging.warning(f"No NXentry found in {self.file_path}. Skipping.")
                     return {}
                 
-                print("Calling _extract_datasets...")
+                
                 self._extract_datasets(nx_entry)
-                print("Finished _extract_datasets")
+                
                                 
                 print(100*"\N{cherries}")
                 scan_metadata = self._extract_scan_metadata(nx_entry)
                 print(100*"\N{rainbow}")
-                for key, value in scan_metadata.items():
-                    self.data_dict[key] = {"value": value}
+                self.data_dict.update(scan_metadata)
                     
-                # Log broken links if any
-                broken_links = [key for key, val in self.structure_dict.items() if val.get("type") == "broken_link"]
+                # Log broken links
+                broken_links = [k for k, v in self.structure_dict.items() if v.get("type") == "broken_link"]
                 if broken_links:
                     logging.warning(f"File {self.file_path} contains {len(broken_links)} broken external links.")
 
