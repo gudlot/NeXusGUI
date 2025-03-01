@@ -233,12 +233,10 @@ class NeXusProcessor:
             value = info.get("value")
             unit = info.get("unit")  # May be None
 
-            if isinstance(value, h5py.Dataset):
-                # Preserve lazy loading by wrapping dataset in a function
-                result[key] = lambda: pl.Series(key, value)  # Deferred loading
+            if callable(value):  # If lazy-loaded, store reference instead of evaluating
+                result[key] = value  # Keeps it as a function for later resolution
             else:
-                # Load scalars, strings eagerly
-                result[key] = value
+                result[key] = value  # Store immediate values
 
             if unit is not None:
                 result[f"{key}_unit"] = unit
