@@ -8,6 +8,7 @@ from typing import Optional, Tuple, Dict, Any
 from base_processing import BaseProcessor
 from functools import partial
 import traceback
+import pprint
 
 # Configure the logger
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
@@ -93,49 +94,37 @@ class NeXusProcessor:
     
     
     
-    def _resolve_lazy_dataset(self, path: str):
-        """Resolves a dataset path when accessed lazily."""
-        try:
-            with h5py.File(self.file_path, "r") as f:
-                dataset = f[path]
-                return dataset[:]  # Load on-demand
-        except KeyError:
-            logging.warning(f"Dataset path not found: {path}")
-        except OSError as e:
-            logging.warning(f"Failed to access dataset at {path}: {e}")
-        return None  # Ensure it returns None if resolution fails
 
-   
 
     def _extract_datasets(self, nx_entry: h5py.Group):
-        """Extracts datasets, preserving hierarchy and handling soft & external links."""
+        """Extracts datasets, preserving hierarchy and soft links, and handling broken external links."""
 
         def process_item(name: str, obj):
             path = f"{self.nx_entry_path}/{name}"
-            print(f"DEBUG: Processing {path}")
+            print(f"DEBUG: Processing {path}")  # Log path being processed
 
             try:
                 if isinstance(obj, h5py.Dataset):
-                    print(f"DEBUG: Found Dataset - {path}")
+                    print(f"DEBUG: Found Dataset - {path}")  # Log dataset processing
                     self._store_dataset(path, obj)
 
                 elif isinstance(obj, h5py.Group):
-                    print(f"DEBUG: Found Group - {path}")
-                    nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", bytes)) else obj.attrs.get("NX_class", "")
+                    print(f"DEBUG: Found Group - {path}")  # Log group processing
+                    nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", ""), bytes) else obj.attrs.get("NX_class", "")
 
                     if nx_class == "NXdata":
                         signal = obj.attrs.get("signal", None)
                         if isinstance(signal, bytes):
                             signal = signal.decode()
 
-                        print(f"DEBUG: Signal dataset = {signal}")
+                        print(f"DEBUG: Signal dataset = {signal}")  # Log signal dataset
 
                         if signal and signal in obj:
                             dataset_path = f"{path}/{signal}"
                             dataset = obj[signal]
 
                             if isinstance(dataset, h5py.ExternalLink):
-                                # Handle external links correctly
+                                # Handle external link dataset
                                 external_file = dataset.filename
                                 external_file_path = os.path.join(os.path.dirname(self.file_path), external_file)
 
@@ -155,52 +144,56 @@ class NeXusProcessor:
                             else:
                                 logging.warning(f"Signal dataset '{signal}' is neither a dataset nor an external link.")
 
-                elif isinstance(obj, h5py.SoftLink):
-                    # Soft link found, store it as a lazy reference
-                    target_path = obj.path
-                    print(f"DEBUG: Found soft link {path} -> {target_path}")
-
-                    # Store soft link reference correctly using `partial`
-                    #self.data_dict[path] = {
-                    #    "source": target_path,
-                    #    "lazy": partial(self._resolve_lazy_dataset, target_path),
-                    #}
-                    self.data_dict[path] = {
-                        "lazy": partial(self._resolve_lazy_dataset, target_path)
-}
-
             except Exception as e:
-                logging.warning(f"Skipping {path} due to error: {e}")
+                logging.warning(f"Skipping {path} due to {e}")
 
-        # Use visititems_links to process **everything**, including soft links
-        nx_entry.visititems_links(process_item)
+        # **Visit all regular datasets/groups first**
+        nx_entry.visititems(process_item)
+
+        # **Visit and process all soft links separately**
+        def process_link(name: str, link_obj):
+            """Process soft links and store them with a unified lazy format."""
+            path = f"{self.nx_entry_path}/{name}"
+
+            if isinstance(link_obj, h5py.SoftLink):
+                target_path = link_obj.path
+                print(f"DEBUG: Found soft link {path} -> {target_path}")
+
+                # Store soft link reference in a unified format
+                self.data_dict[path] = {
+                    "lazy": partial(self._resolve_lazy_dataset, target_path)  # Standardised format
+                }
+
+
+        # Use visititems_links to process **only links**, including soft links
+        nx_entry.visititems_links(process_link)
+
 
 
     def _store_dataset(self, path: str, obj: h5py.Dataset):
         """Efficiently stores dataset values and unit information in data_dict."""
         try:
-            # Determine how to handle the dataset
+                # Determine how to handle the dataset
             if obj.dtype.kind in {"U", "S"}:  # Unicode or byte strings
-                value = obj.asstr()[()]
-                #value = {"value": obj.asstr()[()]}
+                raw_value = obj[()]
+                value = raw_value.decode() if isinstance(raw_value, bytes) else raw_value
             elif obj.shape == () or obj.size == 1:  # Scalar datasets
                 value = obj[()]
-                #value = {"value": obj[()]} 
-            elif obj.ndim >= 1:  # Allow 1D, 2D, and higher dimensions
+            elif obj.ndim == 1 or obj.ndim == 2 or obj.ndim == 3:  # Lazy-load 1D & 2D arrays
                 file_path = str(self.file_path)  # Store file path
                 dataset_name = obj.name  # Store dataset path
-                
+
                 def load_on_demand():
                     """Reopen file and load dataset when needed."""
                     with h5py.File(file_path, "r") as f:
                         return pl.Series(dataset_name, f[dataset_name][:])
 
                 value = {"lazy": load_on_demand}  # Mark as lazy function
-                
+
             else:
                 logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
                 return  # Do not store unsupported datasets
-
+            
             # Store in data_dict
             self.data_dict[path] = {"value": value}
 
@@ -252,32 +245,35 @@ class NeXusProcessor:
         return metadata
 
 
-
     
     def to_dict(self) -> dict:
         """Convert extracted data to a structured dictionary for DataFrame conversion."""
+        
+        # Extract essential metadata
         result = {
             "filename": self.file_path.name,
-            "scan_command": self.data_dict.get("scan_command", {}).get("value"),
-            "scan_id": self.data_dict.get("scan_id", {}).get("value"),
+            "scan_command": self.data_dict.get("scan_command", {"value": "N/A"}).get("value", "N/A"),
+            "scan_id": self.data_dict.get("scan_id", {"value": "N/A"}).get("value", "N/A"),
         }
 
+        print(100*"\N{aubergine}")
+        print("DEBUG: self.data_dict before processing:")
+        for key, value in self.data_dict.items():
+            print(f"{key}: {value}")
+        print(100*"\N{aubergine}")
+
+        # Iterate over extracted datasets and metadata
         for key, info in self.data_dict.items():
-            
-            print(100*"\N{grapes}")
-            print(100*"\N{mango}")
-            
-            print(key, info)  # Debugging statement to check stored values          
-
-            print(100*"\N{mango}")
-            print(100*"\N{grapes}")
-
+            if key in {"scan_command", "scan_id"}:  # Prevent overwriting
+                continue  
 
             if isinstance(info, dict):
-                if "lazy" in info:  
-                    result[key] = info["lazy"]  # Keep soft link as a lazy reference
+                if "lazy" in info:
+                    result[key] = {"lazy": info["lazy"]}  # Preserve lazy references
                 elif "value" in info:
                     result[key] = info["value"]  # Store immediate values
+                    #raw_value = info["value"]
+                    #result[key] = raw_value.decode() if isinstance(raw_value, bytes) else raw_value  # 🔹 Decode bytes
             else:
                 result[key] = info  # Directly store other values (e.g., scalars, strings)
 
@@ -285,7 +281,42 @@ class NeXusProcessor:
             if isinstance(info, dict) and "unit" in info:
                 result[f"{key}_unit"] = info["unit"]
 
+        print("DEBUG: Final result:", result)  
+        print(100*"\N{blueberries}")
         return result
+    
+    def _resolve_lazy_dataset(self, path: str):
+        """Resolves a dataset or group path when accessed lazily, with debugging prints."""
+        try:
+            with h5py.File(self.file_path, "r") as f:
+                obj = f[path]
+                
+                print(f"DEBUG: Resolving {path}")  # Track path resolution
+
+                if isinstance(obj, h5py.Dataset):
+                    print(f"DEBUG: {path} is a dataset. Loading contents...")
+                    return obj[:]  # Load dataset contents
+
+                elif isinstance(obj, h5py.Group):
+                    print(f"DEBUG: {path} is a group. Listing contents:")
+                    
+                    # Print each entry inside the group
+                    for name, item in obj.items():
+                        print(f"    - {name}: {type(item)}")
+
+                    # Load all datasets inside the group into a dictionary
+                    return {
+                        name: dset[:] for name, dset in obj.items() if isinstance(dset, h5py.Dataset)
+                    }
+
+                else:
+                    print(f"⚠️ DEBUG: {path} is an unknown type: {type(obj)}")
+                    return None  
+
+        except Exception as e:
+            print(f"ERROR: Failed to resolve {path}: {e}")
+            return None
+
 
 class NeXusBatchProcessor(BaseProcessor):
     def __init__(self, directory: str):
@@ -386,17 +417,6 @@ class NeXusBatchProcessor(BaseProcessor):
             for k, v in file_data.items()}
             for file_data in self.processed_files.values()
         ])
-
-    def _resolve_lazy_dataset(self, path: str):
-        """Resolves a dataset path when accessed lazily."""
-        try:
-            with h5py.File(self.file_path, "r") as f:
-                dataset = f[path]
-                return dataset[:]  # Load only when accessed
-        except Exception as e:
-            logging.warning(f"Failed to resolve dataset at {path}: {e}")
-            return None
-
     
     
     def evaluate_lazy_column(self, df: pl.DataFrame, column_name: str) -> pl.Series:
@@ -423,12 +443,20 @@ if __name__ == "__main__":
     print(f"Absolute path: {file_path.resolve()}")
         
     sproc=NeXusProcessor("/Users/lotzegud/P08/healthy/nai_250mm_02290.nxs")
-    res= sproc.process()
+    sproc.process()
+    res= sproc.to_dict()
+
     
+    print(100*"\N{mango}")
     for key, value in res.items(): 
         print(key, value)
-        
-    '''    
+        if key == "/scan/ion_bl/mode":
+            print('This is ', type(value))
+        if key == "/scan/start_time":
+            print('This is start_time ', type(value))
+    print(100*"\N{mango}")
+
+    '''
     #h5ls -r /Users/lotzegud/P08/healthy/nai_250mm_02290.nxs
     
     # Check if the file exists
@@ -445,9 +473,8 @@ if __name__ == "__main__":
 
     print("Output saved to hdf5_structure.txt")
           
+    '''
 
-          
-     
     # Initialize the NeXusBatchProcessor with the directory containing .nxs files
     #processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
     processor = NeXusBatchProcessor("/Users/lotzegud/P08/healthy/")
@@ -471,5 +498,4 @@ if __name__ == "__main__":
     #   print(col_name)
     #df= processor.get_dataframe()
     #print(df.head())
- ''' 
-          
+
