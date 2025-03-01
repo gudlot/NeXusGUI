@@ -226,14 +226,20 @@ class NeXusProcessor:
             "scan_id": self.data_dict.get("scan_id", {}).get("value"),
         }
 
-        # Process all dataset values and units in a single loop
         for key, info in self.data_dict.items():
             value = info.get("value")
             unit = info.get("unit")  # May be None
 
-            result[key] = value
-            if unit is not None:  # Only add unit columns if they exist
+            if isinstance(value, h5py.Dataset):
+                # Preserve lazy loading by wrapping dataset in a function
+                result[key] = lambda: pl.Series(key, value)  # Deferred loading
+            else:
+                # Load scalars, strings eagerly
+                result[key] = value
+
+            if unit is not None:
                 result[f"{key}_unit"] = unit
+
 
         return result
    
@@ -320,8 +326,16 @@ class NeXusBatchProcessor(BaseProcessor):
 
     def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return the processed data as a lazy-loaded Polars DataFrame."""
+        
         self.process_files(force_reload)
-        return self._df.lazy()
+
+        # Ensure deferred datasets (h5py.Dataset) are evaluated before creating the DataFrame
+        for file_key, data in self.processed_files.items():
+            for key, value in data.items():
+                if callable(value):  # Check if it's a deferred dataset
+                    data[key] = value()  # Evaluate it as a Polars Series
+
+        return pl.LazyFrame(list(self.processed_files.values()))
     
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
