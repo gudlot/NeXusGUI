@@ -374,11 +374,7 @@ class NeXusBatchProcessor(BaseProcessor):
             # Add human-readable time if 'epoch' is present
             #file_data = self._add_human_readable_time(file_data)
             
-            # Add filename (stripped of path) to the file_data dictionary
-            #file_data = self._add_filename(file_data, file_path)
-            # Add filename explicitly
-            file_data["filename"] = file_path.name  
-
+           
             # Store data **without forcing eager evaluation**
             self.processed_files[str_path] = file_data  
             self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
@@ -387,12 +383,16 @@ class NeXusBatchProcessor(BaseProcessor):
         
         # Store lazy references and soft links properly in `_df`**
         if self.processed_files:
+            first_file = next(iter(self.processed_files.values()))  # Get a sample file
+            columns = ["filename"] + [col for col in first_file.keys() if col != "filename"]
+
+            # Construct DataFrame with proper order, preserving lazy loading
             self._df = pl.DataFrame([
                 {k: v["lazy"] if isinstance(v, dict) and "lazy" in v else
                 v["source"] if isinstance(v, dict) and "source" in v else v
                 for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
-            ])
+            ]).select(columns)  # Ensure column order
 
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
