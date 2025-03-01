@@ -74,24 +74,37 @@ st.markdown("""
 
 
 class FileFilterApp:
-    def __init__(self):
-        self.path = "/Users/lotzegud/P08/fio_nxs_and_cmd_tool/"
+    def __init__(self, default_path: str = "/Users/lotzegud/P08/fio_nxs_and_cmd_tool/" ):
+        self.path = default_path
         self.file_filter = ""
         self.extension_filter = ""
+        
+        logger.debug(f"Current directory path: {self.path}")
+        
         self.selected_files = []
         self.selected_metadata = None
         self.plot_data = {}
         self.processed_data = {}
+        
         self.nexus_processor = NeXusBatchProcessor(self.path)
         self.fio_processor = FioBatchProcessor(self.path)
+        # Initialize session state
+        self._initialize_session_state()
         
-        # Initialize session state if not already set
-        if "selected_files" not in st.session_state:
-            st.session_state["selected_files"] = []
 
-        if "selected_metadata" not in st.session_state:
-            st.session_state["selected_metadata"] = None
-    
+    def _initialize_session_state(self):
+        """Initialize session state variables if they don't already exist."""
+        session_state_defaults = {
+            "selected_files": [],
+            "selected_metadata": None,
+            "extension_filter": "All",
+            "file_filter": "",
+            "current_path": self.path,
+        }
+        
+        for key, value in session_state_defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
 
     def run(self):
         st.title("NeXus-Fio-File Plotting App")
@@ -105,17 +118,45 @@ class FileFilterApp:
         with col2:
             self._render_right_column()
             
-            
+    def _initialize_processors(self):
+        """Reinitialize processors with the current path."""
+        self.nexus_processor = NeXusBatchProcessor(self.path)
+        self.fio_processor = FioBatchProcessor(self.path)
 
     def _render_left_column(self):
         st.header("File Selection")
 
         # Input field for directory path
-        self.path = st.text_input(
+        new_path = st.text_input(
             "Enter the directory path:", 
-            value=self.path if self.path else "/Users/lotzegud/P08/fio_nxs_and_cmd_tool"
+            value=self.path  # No need for a fallback if self.path is always set
         )
-        
+
+        # Check if the path has changed
+        if new_path != self.path:
+            if Path(new_path).is_dir():
+                # First, update session state directly
+                st.session_state["current_path"] = new_path
+                self.path = st.session_state["current_path"]  # Ensure self.path aligns
+
+                # Reset selected files and metadata
+                self.selected_files = []
+                self.selected_metadata = None
+                st.session_state["selected_files"] = []
+                st.session_state["selected_metadata"] = None
+
+                # Clear cached data and reinitialize processors
+                st.cache_data.clear()
+                self._initialize_processors()
+
+                logger.info(f"Path changed to: {self.path}")  # Log after setting state
+
+                # Now trigger a rerun after state updates
+                st.experimental_set_query_params(path=new_path)  # Alternative persistence
+                st.rerun()
+            else:
+                st.error(f"Invalid directory: {new_path}")
+                                    
         if st.button("Force Reload"):
             st.cache_data.clear()
             self.nexus_processor.process_files(force_reload=True)
@@ -340,17 +381,25 @@ class FileFilterApp:
 
     def _get_filtered_files(self):
         """Returns a list of .fio or .nxs files in the directory that match the filters."""
+        
+        
         path = Path(self.path).resolve()  # Ensure absolute path
         if not path.is_dir():
             st.error(f"Invalid directory: {self.path}")
             return []
+        
+        logger.debug(f"Current directory path: {self.path}")
 
         # Read the extension and filename filters from session state
         ext_filter = st.session_state.get("extension_filter", "All")
         file_filter = st.session_state.get("file_filter", "").strip()  # Strip spaces
 
         valid_extensions = (".fio", ".nxs") if ext_filter == "All" else (ext_filter,)
-        files = [f.name for f in path.iterdir() if f.suffix in valid_extensions]
+        # List files in the directory (non-recursive)
+        files = [f.name for f in path.iterdir() if f.is_file() and f.suffix in valid_extensions]
+        
+        # Log the files found in the directory
+        logger.debug(f"Files found in directory: {files}")
 
         # Apply filename filtering (supports numbers)
         if file_filter:
@@ -361,6 +410,9 @@ class FileFilterApp:
                 regex_pattern = re.escape(file_filter).replace(r"\*", ".*").replace(r"\?", ".")
             
             files = [f for f in files if re.search(regex_pattern, f, re.IGNORECASE)]
+            
+             # Log the filtered files
+            logger.debug(f"Filtered files: {files}")
             
         return files
     
@@ -512,5 +564,5 @@ class FileFilterApp:
  
 
 if __name__ == "__main__":
-    app = FileFilterApp()
+    app = FileFilterApp(default_path="/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
     app.run()
