@@ -27,6 +27,7 @@ class NeXusProcessor:
 
             if isinstance(item, h5py.Group):
                 if item.attrs.get("NX_class") in [b"NXentry", "NXentry"]:
+                    print('\n', item, full_path, '\n')
                     return item, full_path  # Immediately return the first match
                 
                 # Recursively search deeper
@@ -37,6 +38,7 @@ class NeXusProcessor:
 
         if is_root:
             logging.warning(f"No NXentry found in {self.file_path}.")
+            
         return None, None
       
     
@@ -51,7 +53,7 @@ class NeXusProcessor:
                     return {}
 
                 self._extract_datasets(nx_entry, nx_entry_path)
-                scan_metadata = self._extract_scan_metadata(nx_entry_path, f)
+                scan_metadata = self._extract_scan_metadata(nx_entry)
                 for key, value in scan_metadata.items():
                     self.data_dict[key] = {"value": value}
 
@@ -136,14 +138,13 @@ class NeXusProcessor:
 
 
 
-    def _extract_scan_metadata(self, nx_entry_path: str, h5file: h5py.File) -> dict:
+    def _extract_scan_metadata(self, nx_entry: h5py.Group) -> dict:
         """Extracts scan metadata from a NeXus file and returns it as a dictionary."""
-        scan_program_name_path = f"{nx_entry_path}/program_name"
         metadata = {}
 
         try:
-            if scan_program_name_path in h5file:
-                dataset = h5file[scan_program_name_path]
+            if "program_name" in nx_entry:
+                dataset = nx_entry["program_name"]
 
                 for key in ["scan_command", "scan_id"]:
                     try:
@@ -162,7 +163,7 @@ class NeXusProcessor:
 
 
         except Exception as e:
-            print(f"Error: Failed to access '{scan_program_name_path}' in the NeXus file: {e}")
+            print(f"Error: Failed to access '{nx_entry}' in the NeXus file: {e}")
 
         return metadata  # Return extracted metadata
 
@@ -365,6 +366,7 @@ if __name__ == "__main__":
     
     
     sproc=NeXusProcessor("/Users/lotzegud/P08/test_folder/h2o_2024_10_16_01116.nxs")
-    res= sproc._extract_scan_metadata("/scan","h2o_2024_10_16_01116.nxs")
+    #res= sproc._extract_scan_metadata("/scan","h2o_2024_10_16_01116.nxs")
+    res= sproc.process()
     
     print(res)
