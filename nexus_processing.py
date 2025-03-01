@@ -84,6 +84,17 @@ class NeXusProcessor:
         return self.to_dict()
     
     
+    
+    def _resolve_lazy_dataset(self, path: str):
+        """Resolves a dataset path when accessed lazily."""
+        try:
+            with h5py.File(self.file_path, "r") as f:
+                dataset = f[path]
+                return dataset[:]  # Load only when accessed
+        except Exception as e:
+            logging.warning(f"Failed to resolve dataset at {path}: {e}")
+            return None
+    
     def _extract_datasets(self, nx_entry: h5py.Group):
         """Extracts datasets and their attributes into data_dict and structure_dict, handling broken external links."""
         
@@ -94,7 +105,17 @@ class NeXusProcessor:
             print(f"DEBUG: Processing {path}")  # Log path being processed
 
             try:
-                if isinstance(obj, h5py.Group):
+                if isinstance(obj, h5py.SoftLink):
+                    # Soft link found, store it as a lazy reference
+                    target_path = obj.path
+                    print(f"DEBUG: Found soft link {path} -> {target_path}")
+
+                    # Store as a lazy reference, without separate "source" key
+                    self.data_dict[path] = {
+                        "lazy": lambda: self._resolve_lazy_dataset(target_path)
+                    }               
+                
+                elif isinstance(obj, h5py.Group):
                     print(f"DEBUG: Found Group - {path}")  # Log group processing
 
                     nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", ""), bytes) else obj.attrs.get("NX_class", "")
@@ -161,7 +182,16 @@ class NeXusProcessor:
             elif obj.shape == () or obj.size == 1:  # Scalar datasets
                 value = obj[()]
             elif obj.ndim == 1 or obj.ndim == 2:  # Lazy-load 1D & 2D arrays
-                value = lambda: pl.Series(path, obj[:])  # Deferred loading
+                file_path = str(self.file_path)  # Store file path
+                dataset_name = obj.name  # Store dataset path
+                
+                def load_on_demand():
+                    """Reopen file and load dataset when needed."""
+                    with h5py.File(file_path, "r") as f:
+                        return pl.Series(dataset_name, f[dataset_name][:])
+
+                value = {"lazy": load_on_demand}  # Mark as lazy function
+                
             else:
                 logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
                 return  # Do not store unsupported datasets
@@ -275,6 +305,7 @@ class NeXusBatchProcessor(BaseProcessor):
         # Only clear the structure list if a full reload is requested
         if force_reload:
             self.structure_list.clear()
+            self.processed_files.clear()
         
         for file_path in self.nxs_files:
             str_path = str(file_path)
@@ -286,29 +317,36 @@ class NeXusBatchProcessor(BaseProcessor):
             processor = NeXusProcessor(str_path)
             file_data = processor.process()
             
+            print(100*"\N{rainbow}")
+            print(100*"\N{peacock}")
+            for key in file_data: 
+                print(key)
+            print(100*"\N{peacock}")
+            print(100*"\N{rainbow}")
+            
             if not file_data:
                 logging.warning(f"Skipping {str_path} due to broken external links or missing data.")
                 continue  # Ignore files with broken links
             
             # Add human-readable time if 'epoch' is present
-            file_data = self._add_human_readable_time(file_data)
+            #file_data = self._add_human_readable_time(file_data)
             
             # Add filename (stripped of path) to the file_data dictionary
-            file_data = self._add_filename(file_data, file_path)
+            #file_data = self._add_filename(file_data, file_path)
 
-            # Cache the processed data
+            # Ensure lazy references are preserved
             self.processed_files[str_path] = file_data
             self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
-
-        # Update cached DataFrame only if there is processed data
+        
+        logging.info(f"Processed {len(self.processed_files)} NeXus files.")
+        
+        # Store lazy-loaded data in `_df` without evaluation**
         if self.processed_files:
-
-            # Update cached DataFrame after processing
-            self._df = pl.DataFrame(list(self.processed_files.values()))
-            
-            # Ensure 'filename' is the first column
-            self._ensure_filename_first_column()
-            
+            self._df = pl.DataFrame([
+                {k: v["lazy"] if isinstance(v, dict) and "lazy" in v else v  # Preserve lazy function
+                for k, v in file_data.items()}
+                for file_data in self.processed_files.values()
+            ])
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return a LazyFrame containing only filename, scan_id, and scan_command."""
@@ -321,22 +359,49 @@ class NeXusBatchProcessor(BaseProcessor):
         return self._df.lazy().select(["filename", "scan_id", "scan_command"])
 
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
-        """Return the processed data as a Polars DataFrame."""
+        """Return the processed data as an **eagerly loaded** Polars DataFrame."""
         self.process_files(force_reload)
-        return self._df
+
+        if self._df is None:
+            raise ValueError("No processed data available.")
+
+        #Resolve all lazy-loaded datasets before creating the DataFrame**
+        df_eager = self._df.with_columns([
+            pl.col(col).map_elements(lambda x: x() if callable(x) else x)
+            for col in self._df.columns
+        ])
+
+        return df_eager
+
 
     def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return the processed data as a lazy-loaded Polars DataFrame."""
         
         self.process_files(force_reload)
 
-        # Ensure deferred datasets (h5py.Dataset) are evaluated before creating the DataFrame
-        for file_key, data in self.processed_files.items():
-            for key, value in data.items():
-                if callable(value):  # Check if it's a deferred dataset
-                    data[key] = value()  # Evaluate it as a Polars Series
+        def resolve_lazy(value):
+            """Helper function to evaluate lazy datasets properly."""
+            if isinstance(value, dict) and "lazy" in value:
+                return value  # Store lazy reference, don't evaluate now
+            return value  # Keep immediate values as they are
 
-        return pl.LazyFrame(list(self.processed_files.values()))
+        processed_data = [
+            {k: resolve_lazy(v) for k, v in file_data.items()}
+            for file_data in self.processed_files.values()
+        ]
+
+        # Convert processed data to Polars DataFrame
+        return pl.DataFrame(processed_data).lazy()
+
+
+    
+    def evaluate_lazy_column(self, df: pl.DataFrame, column_name: str) -> pl.Series:
+        """Evaluate a specific lazy-loaded column when needed."""
+        #df = processor.get_dataframe()
+        #df = df.with_columns(processor.evaluate_lazy_column(df, "/scan/data/lambda_roi1"))  # Load specific dataset
+
+        return df[column_name].apply(lambda x: x["lazy"]() if isinstance(x, dict) and "lazy" in x else x)
+
     
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
@@ -348,36 +413,27 @@ class NeXusBatchProcessor(BaseProcessor):
 if __name__ == "__main__":
     
     
-    # Load NeXusProcessor class (ensure the class definition is included in your script or imported)
-    #file_path = Path("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs")
-    #file_path = Path("/Users/lotzegud/P08/11019623/raw/nai_250mm_02313.nxs")
-    file_path = Path("/Users/lotzegud/P08/11019623/raw/nai_250mm_02415.nxs")
-
+    file_path = Path("/Users/lotzegud/P08/healthy/nai_250mm_02290.nxs")
+    print(f"File exists: {file_path.exists()}")
+    print(f"Absolute path: {file_path.resolve()}")
+        
+        
+        
+    #h5ls -r /Users/lotzegud/P08/healthy/nai_250mm_02290.nxs
     
-    print("File exists:", file_path.exists())
-    print("Absolute path:", file_path.resolve())
+    # Check if the file exists
+    if not file_path.exists():
+        print(f"Error: File does not exist at {file_path.resolve()}")
+    else:
+        with h5py.File(file_path, "r") as f, open("/Users/lotzegud/P08/hdf5_structure.txt", "w") as output_file:
+            def print_structure(name, obj):
+                output_file.write(f"Path: {name}\n")
+                for attr in obj.attrs:
+                    output_file.write(f"  - Attribute: {attr} = {obj.attrs[attr]}\n")
 
-    # Create an instance of NeXusProcessor
-    processor = NeXusProcessor(file_path)
+            f.visititems(print_structure)
 
-    # Process the file to extract all data
-    data_dict = processor.process()
-
-    # Debug print the extracted scan metadata
-    scan_command = data_dict.get("scan_command")
-    scan_id = data_dict.get("scan_id")
-
-    logger.debug(f"Final extracted scan metadata: scan_command={scan_command}, scan_id={scan_id}")
-
-    # Print the structured result
-    print(data_dict)  
-    
-    
-    for key, value in data_dict.items():
-        if value is None:
-            print(f"⚠️ None found for key: {key}")
-        elif isinstance(value, h5py.Dataset) and not value.id.valid:
-            print(f"⚠️ Closed HDF5 dataset at key: {key}")      
+    print("Output saved to hdf5_structure.txt")
           
           
           
@@ -387,20 +443,19 @@ if __name__ == "__main__":
     processor = NeXusBatchProcessor("/Users/lotzegud/P08/healthy/")
     
     # Process the files and get the DataFrame
-    #df = processor.get_dataframe()
+    df = processor.get_dataframe()
     # Print the DataFrame
-    #print("Processed DataFrame:")
-    #print(df.head())
+    print("Processed DataFrame:")
+    print(df.head())
     
-    df_lazy= processor.get_lazy_dataframe()
-    print(df_lazy.head())
+    #df_lazy= processor.get_lazy_dataframe()
+    #print(df_lazy.head())
     
     print(100*"\N{hot pepper}")
        
     #print(df_lazy.collect_schema().names)
-    for col_name in df_lazy.schema:
-        print(col_name)
-     
-    df= processor.get_dataframe()
-    print(df.head())
+    #for col_name in df_lazy.schema:
+    #   print(col_name)
+    #df= processor.get_dataframe()
+    #print(df.head())
  
