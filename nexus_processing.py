@@ -90,67 +90,62 @@ class NeXusProcessor:
         """Extracts datasets and their attributes into data_dict and structure_dict, handling broken external links."""
         
         def process_item(name: str, obj):
-            
-            print(30*"\N{peacock}")
-            
+            print(30 * "\N{peacock}")  # Confirm execution
+
             path = f"{self.nx_entry_path}/{name}"
             print(f"DEBUG: Processing {path}")  # Log path being processed
-
-            # Build hierarchical structure dictionary
-            levels = path.strip("/").split("/")
-            sub_dict = self.structure_dict
-            for level in levels[:-1]:
-                sub_dict = sub_dict.setdefault(level, {})
 
             try:
                 if isinstance(obj, h5py.Group):
                     print(f"DEBUG: Found Group - {path}")  # Log group processing
-                    # Store group structure
-                    sub_dict[levels[-1]] = {"type": "group", "children": {}}
 
-                    # Handle NXdata groups explicitly
                     nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", ""), bytes) else obj.attrs.get("NX_class", "")
                     print(f"DEBUG: NX_class = {nx_class}")  # Log NX_class
-                    
-                    
+
                     if nx_class == "NXdata":
-                        # Extract the 'signal' dataset if defined
                         signal = obj.attrs.get("signal", None)
                         if isinstance(signal, bytes):
                             signal = signal.decode()
-                            
+
                         print(f"DEBUG: Signal dataset = {signal}")  # Log signal dataset
 
                         if signal:
                             dataset_path = f"{path}/{signal}"
-                            if signal in obj:  # Check if dataset actually exists
+                            
+                            if signal in obj:
                                 try:
                                     dataset = obj[signal]
-                                    if isinstance(dataset, h5py.Dataset):
+                                    
+                                    # 🔹 **Check if it's an external link**
+                                    if isinstance(dataset, h5py.ExternalLink):
+                                        external_file = dataset.filename
+                                        external_file_path = os.path.join(os.path.dirname(self.file_path), external_file)
+
+                                        if os.path.exists(external_file_path):
+                                            print(f"DEBUG: External link is valid: {external_file_path}")
+                                            # Attempt to open the linked dataset
+                                            try:
+                                                with h5py.File(external_file_path, "r") as ext_file:
+                                                    linked_dataset = ext_file[dataset.path]
+                                                    self._store_dataset(dataset_path, linked_dataset)
+                                            except Exception as e:
+                                                logging.warning(f"Skipping broken external link {dataset_path}: {e}")
+                                        else:
+                                            logging.warning(f"Skipping missing external link: {dataset_path} -> {external_file}")
+
+                                    elif isinstance(dataset, h5py.Dataset):
                                         self._store_dataset(dataset_path, dataset)
+
                                 except OSError as e:
                                     logging.warning(f"Skipping broken external link: {dataset_path} due to {e}")
                             else:
                                 logging.warning(f"Signal dataset '{signal}' not found in {path}")
 
-                        # Ensure all datasets inside NXdata are stored
-                        for dataset_name in obj.keys():
-                            dataset_path = f"{path}/{dataset_name}"
-                            try:
-                                dataset = obj[dataset_name]
-                                if isinstance(dataset, h5py.Dataset):
-                                    self._store_dataset(dataset_path, dataset)
-                            except OSError as e:
-                                self.structure_dict[levels[-1]] = {"type": "broken_link", "error": str(e)}
-                                logging.warning(f"Skipping broken external link: {dataset_path} due to {e}")
-
                 elif isinstance(obj, h5py.Dataset):
                     print(f"DEBUG: Found Dataset - {path}")  # Log dataset processing
-                    # Store dataset information
-                    sub_dict[levels[-1]] = {"type": "dataset", "shape": obj.shape, "dtype": str(obj.dtype)}
                     self._store_dataset(path, obj)
 
-            except OSError as e:
+            except Exception as e:  # Catch ALL exceptions
                 logging.warning(f"Skipping {path} due to {e}")
 
         nx_entry.visititems(process_item)
