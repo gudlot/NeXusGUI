@@ -195,15 +195,18 @@ class NeXusProcessor:
         if "program_name" in nx_entry:
             try:
                 program_name_dataset = nx_entry["program_name"]
-                metadata["program_name"] = program_name_dataset[()]  # Extract scalar value
-                
-                # Decode bytes if necessary
-                if isinstance(metadata["program_name"], bytes):
-                    metadata["program_name"] = metadata["program_name"].decode()
+                metadata["program_name"] = (
+                    program_name_dataset[()].decode()
+                    if isinstance(program_name_dataset[()], bytes)
+                    else program_name_dataset[()]
+                )
 
-                # Extract attributes using .attrs.get()
-                metadata["scan_command"] = program_name_dataset.attrs.get("scan_command", "N/A")
-                metadata["scan_id"] = program_name_dataset.attrs.get("scan_id", "N/A")
+                # Extract attributes efficiently
+                metadata.update({
+                    key: (value.decode() if isinstance(value, bytes) else str(value))
+                    for key in ["scan_command", "scan_id"]
+                    if (value := program_name_dataset.attrs.get(key, "N/A")) is not None
+                })
 
                 logging.debug(f"Extracted metadata: {metadata}")
 
@@ -331,7 +334,10 @@ if __name__ == "__main__":
     
     
     # Load NeXusProcessor class (ensure the class definition is included in your script or imported)
-    file_path = Path("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs")
+    #file_path = Path("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs")
+    #file_path = Path("/Users/lotzegud/P08/11019623/raw/nai_250mm_02313.nxs")
+    file_path = Path("/Users/lotzegud/P08/11019623/raw/nai_250mm_02415.nxs")
+
     
     print("File exists:", file_path.exists())
     print("Absolute path:", file_path.resolve())
@@ -349,4 +355,37 @@ if __name__ == "__main__":
     logger.debug(f"Final extracted scan metadata: scan_command={scan_command}, scan_id={scan_id}")
 
     # Print the structured result
-    print(data_dict)        
+    print(data_dict)  
+    
+    
+    for key, value in data_dict.items():
+        if value is None:
+            print(f"⚠️ None found for key: {key}")
+        elif isinstance(value, h5py.Dataset) and not value.id.valid:
+            print(f"⚠️ Closed HDF5 dataset at key: {key}")      
+          
+          
+          
+     
+    # Initialize the NeXusBatchProcessor with the directory containing .nxs files
+    #processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
+    processor = NeXusBatchProcessor("/Users/lotzegud/P08/healthy/")
+    
+    # Process the files and get the DataFrame
+    #df = processor.get_dataframe()
+    # Print the DataFrame
+    #print("Processed DataFrame:")
+    #print(df.head())
+    
+    df_lazy= processor.get_lazy_dataframe()
+    print(df_lazy.head())
+    
+    print(100*"\N{hot pepper}")
+       
+    #print(df_lazy.collect_schema().names)
+    for col_name in df_lazy.schema:
+        print(col_name)
+     
+    df= processor.get_dataframe()
+    print(df.head())
+ 
