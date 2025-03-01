@@ -182,9 +182,11 @@ class NeXusProcessor:
             # Determine how to handle the dataset
             if obj.dtype.kind in {"U", "S"}:  # Unicode or byte strings
                 value = obj.asstr()[()]
+                #value = {"value": obj.asstr()[()]}
             elif obj.shape == () or obj.size == 1:  # Scalar datasets
                 value = obj[()]
-            elif obj.ndim == 1 or obj.ndim == 2:  # Lazy-load 1D & 2D arrays
+                #value = {"value": obj[()]} 
+            elif obj.ndim >= 1:  # Allow 1D, 2D, and higher dimensions
                 file_path = str(self.file_path)  # Store file path
                 dataset_name = obj.name  # Store dataset path
                 
@@ -261,7 +263,15 @@ class NeXusProcessor:
         }
 
         for key, info in self.data_dict.items():
-            print(key, info)  # Debugging statement to check stored values
+            
+            print(100*"\N{grapes}")
+            print(100*"\N{mango}")
+            
+            print(key, info)  # Debugging statement to check stored values          
+
+            print(100*"\N{mango}")
+            print(100*"\N{grapes}")
+
 
             if isinstance(info, dict):
                 if "lazy" in info:  
@@ -300,11 +310,13 @@ class NeXusBatchProcessor(BaseProcessor):
         if len(self.nxs_files) > len(existing_files):
             logging.info(f"Detected {len(self.nxs_files) - len(existing_files)} new files.")
 
+
+
+
     def process_files(self, force_reload: bool = False):
         """Processes all NeXus files, caching results and avoiding redundant work."""
         self.update_files()  # Check for new files before processing
         
-        # Only clear the structure list if a full reload is requested
         if force_reload:
             self.structure_list.clear()
             self.processed_files.clear()
@@ -312,37 +324,31 @@ class NeXusBatchProcessor(BaseProcessor):
         for file_path in self.nxs_files:
             str_path = str(file_path)
 
-            # Skip already processed files unless force_reload is enabled
             if not force_reload and str_path in self.processed_files:
-                continue
+                continue  # Skip if already processed
 
             processor = NeXusProcessor(str_path)
             file_data = processor.process()
-            
-                        
+
             if not file_data:
                 logging.warning(f"Skipping {str_path} due to broken external links or missing data.")
-                continue  # Ignore files with broken links
+                continue  
+            
             
             # Add human-readable time if 'epoch' is present
             #file_data = self._add_human_readable_time(file_data)
             
             # Add filename (stripped of path) to the file_data dictionary
             #file_data = self._add_filename(file_data, file_path)
+            # Add filename explicitly
+            file_data["filename"] = file_path.name  
 
-            # Ensure lazy references are preserved
-            self.processed_files[str_path] = file_data
+            # Store data **without forcing eager evaluation**
+            self.processed_files[str_path] = file_data  
             self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
-        
+
         logging.info(f"Processed {len(self.processed_files)} NeXus files.")
-        
-        # Store lazy-loaded data in `_df` without evaluation**
-        if self.processed_files:
-            self._df = pl.DataFrame([
-                {k: v["lazy"] if isinstance(v, dict) and "lazy" in v else v  # Preserve lazy function
-                for k, v in file_data.items()}
-                for file_data in self.processed_files.values()
-            ])
+
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return a LazyFrame containing only filename, scan_id, and scan_command."""
@@ -355,19 +361,19 @@ class NeXusBatchProcessor(BaseProcessor):
         return self._df.lazy().select(["filename", "scan_id", "scan_command"])
 
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
-        """Return the processed data as an **eagerly loaded** Polars DataFrame."""
+        """Return the processed data as a fully loaded Polars DataFrame."""
+        
         self.process_files(force_reload)
 
-        if self._df is None:
-            raise ValueError("No processed data available.")
+        def resolve_lazy(value):
+            """Helper function to resolve deferred datasets when accessed."""
+            return value["lazy"]() if isinstance(value, dict) and "lazy" in value else value
 
-        #Resolve all lazy-loaded datasets before creating the DataFrame**
-        df_eager = self._df.with_columns([
-            pl.col(col).map_elements(lambda x: x() if callable(x) else x)
-            for col in self._df.columns
+        return pl.DataFrame([
+            {k: resolve_lazy(v) for k, v in file_data.items()}  # Force evaluation
+            for file_data in self.processed_files.values()
         ])
 
-        return df_eager
 
 
     def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
@@ -375,21 +381,23 @@ class NeXusBatchProcessor(BaseProcessor):
         
         self.process_files(force_reload)
 
-        def resolve_lazy(value):
-            """Helper function to evaluate lazy datasets properly."""
-            if isinstance(value, dict) and "lazy" in value:
-                return value  # Store lazy reference, don't evaluate now
-            return value  # Keep immediate values as they are
-
-        processed_data = [
-            {k: resolve_lazy(v) for k, v in file_data.items()}
+        return pl.LazyFrame([
+            {k: v["lazy"] if isinstance(v, dict) and "lazy" in v else v  # Preserve lazy function
+            for k, v in file_data.items()}
             for file_data in self.processed_files.values()
-        ]
+        ])
 
-        # Convert processed data to Polars DataFrame
-        return pl.DataFrame(processed_data).lazy()
+    def _resolve_lazy_dataset(self, path: str):
+        """Resolves a dataset path when accessed lazily."""
+        try:
+            with h5py.File(self.file_path, "r") as f:
+                dataset = f[path]
+                return dataset[:]  # Load only when accessed
+        except Exception as e:
+            logging.warning(f"Failed to resolve dataset at {path}: {e}")
+            return None
 
-
+    
     
     def evaluate_lazy_column(self, df: pl.DataFrame, column_name: str) -> pl.Series:
         """Evaluate a specific lazy-loaded column when needed."""
@@ -437,7 +445,7 @@ if __name__ == "__main__":
 
     print("Output saved to hdf5_structure.txt")
           
-          
+
           
      
     # Initialize the NeXusBatchProcessor with the directory containing .nxs files
@@ -454,11 +462,14 @@ if __name__ == "__main__":
     #print(df_lazy.head())
     
     print(100*"\N{hot pepper}")
+    
+    for col in df.columns:
+        print(col)
        
     #print(df_lazy.collect_schema().names)
     #for col_name in df_lazy.schema:
     #   print(col_name)
     #df= processor.get_dataframe()
     #print(df.head())
- 
-'''
+ ''' 
+          
