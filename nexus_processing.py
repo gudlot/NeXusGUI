@@ -151,24 +151,25 @@ class NeXusProcessor:
 
     def _store_dataset(self, path: str, obj: h5py.Dataset):
         """Efficiently stores dataset values and unit information in data_dict."""
-
-        shape = obj.shape
-        dtype = obj.dtype
-
         try:
-            # Efficient handling of different data types
-            if dtype.kind in {"U", "S"}:  # Unicode or byte strings
+            # Determine how to handle the dataset
+            if obj.dtype.kind in {"U", "S"}:  # Unicode or byte strings
                 value = obj.asstr()[()]
-            elif shape == () or obj.size == 1:  # Scalar datasets
+            elif obj.shape == () or obj.size == 1:  # Scalar datasets
                 value = obj[()]
+            elif obj.ndim == 1 or obj.ndim == 2:  # Lazy-load 1D & 2D arrays
+                value = lambda: pl.Series(path, obj[:])  # Deferred loading
             else:
-                value = obj  # Stores the reference to the dataset (obj) instead of immediately loading it 
+                logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
+                return  # Do not store unsupported datasets
 
             # Store in data_dict
             self.data_dict[path] = {"value": value}
 
-            # Add unit if available
+            # Handle unit attribute correctly
             unit = obj.attrs.get("unit", None)
+            if isinstance(unit, bytes):  # Ensure decoding if unit is stored as bytes
+                unit = unit.decode()
             if unit is not None:
                 self.data_dict[path]["unit"] = unit
 
