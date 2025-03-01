@@ -147,10 +147,10 @@ class NeXusProcessor:
             except Exception as e:
                 logging.warning(f"Skipping {path} due to {e}")
 
-        # **Visit all regular datasets/groups first**
+        #Visit all regular datasets/groups first**
         nx_entry.visititems(process_item)
 
-        # **Visit and process all soft links separately**
+        #Visit and process all soft links separately**
         def process_link(name: str, link_obj):
             """Process soft links and store them with a unified lazy format."""
             path = f"{self.nx_entry_path}/{name}"
@@ -160,10 +160,13 @@ class NeXusProcessor:
                 print(f"DEBUG: Found soft link {path} -> {target_path}")
 
                 # Store soft link reference in a unified format
+                #self.data_dict[path] = {
+                #    "lazy": partial(self._resolve_lazy_dataset, target_path)  # Standardised format
+                #}
+                # Store the reference to the target dataset
                 self.data_dict[path] = {
-                    "lazy": partial(self._resolve_lazy_dataset, target_path)  # Standardised format
+                    "source": target_path  # Keeps the reference path without causing lazy evaluation issues
                 }
-
 
         # Use visititems_links to process **only links**, including soft links
         nx_entry.visititems_links(process_link)
@@ -274,6 +277,8 @@ class NeXusProcessor:
                     result[key] = info["value"]  # Store immediate values
                     #raw_value = info["value"]
                     #result[key] = raw_value.decode() if isinstance(raw_value, bytes) else raw_value  # 🔹 Decode bytes
+                elif "source" in info:  
+                    result[key] = {"source": info["source"]}  # Keep soft link reference as source path
             else:
                 result[key] = info  # Directly store other values (e.g., scalars, strings)
 
