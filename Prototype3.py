@@ -79,10 +79,18 @@ class FileFilterApp:
         self.file_filter = ""
         self.extension_filter = ""
         self.selected_files = []
+        self.selected_metadata = None
         self.plot_data = {}
         self.processed_data = {}
         self.nexus_processor = NeXusBatchProcessor(self.path)
         self.fio_processor = FioBatchProcessor(self.path)
+        
+        # Initialize session state if not already set
+        if "selected_files" not in st.session_state:
+            st.session_state["selected_files"] = []
+
+        if "selected_metadata" not in st.session_state:
+            st.session_state["selected_metadata"] = None
     
 
     def run(self):
@@ -147,7 +155,7 @@ class FileFilterApp:
     def compute_optimal_column_widths(
         df: pl.DataFrame, 
         char_width: int = 9, 
-        min_width: int = 100, 
+        min_width: int = 150, 
         max_width: int = 800,
         default_buffer: float = 1.05,  # Default buffer for most columns
         filename_buffer: float = 1.2,  # Larger buffer for filename (checkboxes)
@@ -198,17 +206,14 @@ class FileFilterApp:
         logger.debug(f"Computed column widths: {col_widths}")
         return col_widths
 
-
-
-
-            
+           
         
     def _render_selectable_table(self, filtered_files):
         """Displays a scrollable, multi-column table with selectable rows using st_aggrid."""
         if not filtered_files:
             st.write("No files match the filter.")
             return
-        
+    
     
         # Determine file types
         nxs_files = [f for f in filtered_files if f.endswith(".nxs")]
@@ -315,25 +320,31 @@ class FileFilterApp:
         logger.debug(f"Selected Rows Content: {grid_response['selected_rows']}")
         logger.debug(f'type {type(grid_response['selected_rows'])}')
 
-        # Ensure grid_response is valid before proceeding
-        #Explanation:
-        #not grid_response: Ensures grid_response exists.
-        #"selected_rows" not in grid_response: Checks that "selected_rows" is a valid key.
-        #grid_response["selected_rows"] is None: Ensures it is not None.
-        #grid_response["selected_rows"].empty: Ensures it is not an empty DataFrame.
-        if not grid_response or "selected_rows" not in grid_response or grid_response["selected_rows"] is None or grid_response["selected_rows"].empty:
-            st.warning("No selection data available.")
-            self.selected_files = []
-            return
+        #Moved this block into the constuctor
+        #if "selected_files" not in st.session_state:
+        #    st.session_state["selected_files"] = []
+        #if "selected_metadata" not in st.session_state:
+        #    st.session_state["selected_metadata"] = None  # Will store a Polars DataFrame
 
-        # Update selected files safely
-        #self.selected_files = [row["Filename"] for row in grid_response["selected_rows"] if "Filename" in row]
-        self.selected_files = grid_response["selected_rows"]["filename"].tolist()
+        
+        # Extract selected filenames from the AgGrid response
+        if grid_response and "selected_rows" in grid_response:
+            selected_df = pd.DataFrame(grid_response["selected_rows"])
+            if "filename" in selected_df.columns:
+                st.session_state["selected_files"] = selected_df["filename"].tolist()
+                self.selected_files = st.session_state["selected_files"] 
+                
+                # Store selected metadata as a Polars DataFrame
+                self.selected_metadata = pl.from_pandas(selected_df)
+                st.session_state["selected_metadata"] = self.selected_metadata
+            else:
+                self.selected_metadata = None
+                st.session_state["selected_metadata"] = None  # Clear if nothing selected
 
         # Debugging: Verify selected files
         logger.debug("\N{hot pepper}")
-        logger.debug(f'Selected files: {self.selected_files}')
-  
+        logger.debug(f"Selected files: {self.selected_files}")
+
     def _get_filtered_files(self):
         """Returns a list of .fio or .nxs files in the directory that match the filters."""
         path = Path(self.path).resolve()  # Ensure absolute path
