@@ -320,13 +320,6 @@ class FileFilterApp:
         logger.debug(f"Selected Rows Content: {grid_response['selected_rows']}")
         logger.debug(f'type {type(grid_response['selected_rows'])}')
 
-        #Moved this block into the constuctor
-        #if "selected_files" not in st.session_state:
-        #    st.session_state["selected_files"] = []
-        #if "selected_metadata" not in st.session_state:
-        #    st.session_state["selected_metadata"] = None  # Will store a Polars DataFrame
-
-        
         # Extract selected filenames from the AgGrid response
         if grid_response and "selected_rows" in grid_response:
             selected_df = pd.DataFrame(grid_response["selected_rows"])
