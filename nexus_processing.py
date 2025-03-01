@@ -274,9 +274,9 @@ class NeXusProcessor:
                 if "lazy" in info:
                     result[key] = {"lazy": info["lazy"]}  # Preserve lazy references
                 elif "value" in info:
-                    result[key] = info["value"]  # Store immediate values
-                    #raw_value = info["value"]
-                    #result[key] = raw_value.decode() if isinstance(raw_value, bytes) else raw_value  # 🔹 Decode bytes
+                    #result[key] = info["value"]  # Store immediate values
+                    raw_value = info["value"]
+                    result[key] = raw_value.decode() if isinstance(raw_value, bytes) else raw_value  # 🔹 Decode bytes
                 elif "source" in info:  
                     result[key] = {"source": info["source"]}  # Keep soft link reference as source path
             else:
@@ -384,6 +384,15 @@ class NeXusBatchProcessor(BaseProcessor):
             self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
 
         logging.info(f"Processed {len(self.processed_files)} NeXus files.")
+        
+        # Store lazy references and soft links properly in `_df`**
+        if self.processed_files:
+            self._df = pl.DataFrame([
+                {k: v["lazy"] if isinstance(v, dict) and "lazy" in v else
+                v["source"] if isinstance(v, dict) and "source" in v else v
+                for k, v in file_data.items()}
+                for file_data in self.processed_files.values()
+            ])
 
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
@@ -497,6 +506,9 @@ if __name__ == "__main__":
     
     for col in df.columns:
         print(col)
+        
+        
+    print(df["/scan/instrument/source/probe"])
        
     #print(df_lazy.collect_schema().names)
     #for col_name in df_lazy.schema:
