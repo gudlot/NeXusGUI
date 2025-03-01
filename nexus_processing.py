@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Optional, Tuple, Dict, Any
 from base_processing import BaseProcessor
 
-
+import traceback
 
 # Configure the logger
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
@@ -52,18 +52,33 @@ class NeXusProcessor:
     def process(self) -> dict:
         """Extracts data and returns it as a structured dictionary."""
         try:
-            with h5py.File(self.file_path, 'r', libver="latest") as f:
-                nx_entry, nx_entry_path = self.find_nxentry(f)
+            with h5py.File(self.file_path, "r", libver="latest") as f:
+
+                nx_entry, self.nx_entry_path = self.find_nxentry(f)
+                
+                print(100*"\N{rainbow}")
+                print(f"nx_entry path: {nx_entry.name}")  # Should be "/scan"
+                print(100*"\N{rainbow}")
+                
                 if nx_entry is None:
                     logging.warning(f"Skipping file {self.file_path}: No NXentry found.")
                     return {}
                 
-                self.nx_entry_path = nx_entry_path  # Store NXentry path
-
+                print("Calling _extract_datasets...")
                 self._extract_datasets(nx_entry)
+                print("Finished _extract_datasets")
+                                
+                print(100*"\N{cherries}")
                 scan_metadata = self._extract_scan_metadata(nx_entry)
+                print(100*"\N{rainbow}")
                 for key, value in scan_metadata.items():
                     self.data_dict[key] = {"value": value}
+                    
+                # Log broken links if any
+                broken_links = [key for key, val in self.structure_dict.items() if val.get("type") == "broken_link"]
+                if broken_links:
+                    logging.warning(f"File {self.file_path} contains {len(broken_links)} broken external links.")
+
 
         except Exception as e:
             logging.error(f"Error extracting data from {self.file_path}: {e}")
@@ -72,10 +87,14 @@ class NeXusProcessor:
     
     
     def _extract_datasets(self, nx_entry: h5py.Group):
-        """Extracts datasets and their attributes into data_dict and structure_dict."""
+        """Extracts datasets and their attributes into data_dict and structure_dict, handling broken external links."""
+        
         def process_item(name: str, obj):
+            
+            print(30*"\N{peacock}")
+            
             path = f"{self.nx_entry_path}/{name}"
-            #print(f"Processing: {path}, Type: {type(obj)}")
+            print(f"DEBUG: Processing {path}")  # Log path being processed
 
             # Build hierarchical structure dictionary
             levels = path.strip("/").split("/")
@@ -83,38 +102,60 @@ class NeXusProcessor:
             for level in levels[:-1]:
                 sub_dict = sub_dict.setdefault(level, {})
 
-            if isinstance(obj, h5py.Group):
-                # Store group structure
-                sub_dict[levels[-1]] = {"type": "group", "children": {}}
+            try:
+                if isinstance(obj, h5py.Group):
+                    print(f"DEBUG: Found Group - {path}")  # Log group processing
+                    # Store group structure
+                    sub_dict[levels[-1]] = {"type": "group", "children": {}}
 
-                # Handle NXdata groups explicitly
-                nx_class = obj.attrs.get("NX_class", "")
-                if isinstance(nx_class, bytes):
-                    nx_class = nx_class.decode()
-                
-                if nx_class == "NXdata":
-                    # Extract the 'signal' dataset if defined
-                    signal = obj.attrs.get("signal", None)
-                    if isinstance(signal, bytes):
-                        signal = signal.decode()
+                    # Handle NXdata groups explicitly
+                    nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", ""), bytes) else obj.attrs.get("NX_class", "")
+                    print(f"DEBUG: NX_class = {nx_class}")  # Log NX_class
+                    
+                    
+                    if nx_class == "NXdata":
+                        # Extract the 'signal' dataset if defined
+                        signal = obj.attrs.get("signal", None)
+                        if isinstance(signal, bytes):
+                            signal = signal.decode()
+                            
+                        print(f"DEBUG: Signal dataset = {signal}")  # Log signal dataset
 
-                    if signal and signal in obj:
-                        dataset = obj[signal]
-                        self._store_dataset(f"{path}/{signal}", dataset)
+                        if signal:
+                            dataset_path = f"{path}/{signal}"
+                            if signal in obj:  # Check if dataset actually exists
+                                try:
+                                    dataset = obj[signal]
+                                    if isinstance(dataset, h5py.Dataset):
+                                        self._store_dataset(dataset_path, dataset)
+                                except OSError as e:
+                                    logging.warning(f"Skipping broken external link: {dataset_path} due to {e}")
+                            else:
+                                logging.warning(f"Signal dataset '{signal}' not found in {path}")
 
-                    # Ensure all datasets inside NXdata are stored
-                    for dataset_name in obj.keys():
-                        dataset_path = f"{path}/{dataset_name}"
-                        dataset = obj[dataset_name]
-                        if isinstance(dataset, h5py.Dataset):
-                            self._store_dataset(dataset_path, dataset)
+                        # Ensure all datasets inside NXdata are stored
+                        for dataset_name in obj.keys():
+                            dataset_path = f"{path}/{dataset_name}"
+                            try:
+                                dataset = obj[dataset_name]
+                                if isinstance(dataset, h5py.Dataset):
+                                    self._store_dataset(dataset_path, dataset)
+                            except OSError as e:
+                                self.structure_dict[levels[-1]] = {"type": "broken_link", "error": str(e)}
+                                logging.warning(f"Skipping broken external link: {dataset_path} due to {e}")
 
-            elif isinstance(obj, h5py.Dataset):
-                # Store dataset information
-                sub_dict[levels[-1]] = {"type": "dataset", "shape": obj.shape, "dtype": str(obj.dtype)}
-                self._store_dataset(path, obj)
+                elif isinstance(obj, h5py.Dataset):
+                    print(f"DEBUG: Found Dataset - {path}")  # Log dataset processing
+                    # Store dataset information
+                    sub_dict[levels[-1]] = {"type": "dataset", "shape": obj.shape, "dtype": str(obj.dtype)}
+                    self._store_dataset(path, obj)
+
+            except OSError as e:
+                logging.warning(f"Skipping {path} due to {e}")
 
         nx_entry.visititems(process_item)
+
+
 
 
 
@@ -148,28 +189,31 @@ class NeXusProcessor:
 
     def _extract_scan_metadata(self, nx_entry: h5py.Group) -> dict:
         """Extracts scan metadata from a NeXus file and returns it as a dictionary."""
+        
         metadata = {}
+        print(100*"\N{cherries}")
+    
+        
+        logging.debug(f"Here we go nx_entry path: {nx_entry.name}")
 
-        try:
-            if "program_name" in nx_entry:
-                obj = nx_entry["program_name"]  # This is a group, not a dataset
+        # Check if 'program_name' dataset exists
+        if "program_name" in nx_entry:
+            try:
+                program_name_dataset = nx_entry["program_name"]
+                metadata["program_name"] = program_name_dataset[()]  # Extract scalar value
+                
+                # Decode bytes if necessary
+                if isinstance(metadata["program_name"], bytes):
+                    metadata["program_name"] = metadata["program_name"].decode()
 
-                for key in ["scan_command", "scan_id"]:
-                    value = obj.attrs.get(key, None)
+                # Extract attributes using .attrs.get()
+                metadata["scan_command"] = program_name_dataset.attrs.get("scan_command", "N/A")
+                metadata["scan_id"] = program_name_dataset.attrs.get("scan_id", "N/A")
 
-                    # Decode bytes if necessary
-                    if isinstance(value, bytes):
-                        value = value.decode()
-                    elif isinstance(value, np.ndarray) and value.dtype.kind in {"U", "S"}:
-                        value = value[0]  # Extract first element if an array of strings
+                logging.debug(f"Extracted metadata: {metadata}")
 
-                    metadata[key] = value  # Store in dictionary
-                    
-                    # Log extracted values for debugging
-                    logger.debug(f"Extracted metadata: {key} = {value}")
-
-        except Exception as e:
-            logging.warning(f"Failed to extract scan metadata: {e}")
+            except OSError as e:
+                logging.warning(f"Skipping 'program_name' due to broken external link: {e}")
 
         return metadata
 
@@ -290,159 +334,6 @@ class NeXusBatchProcessor(BaseProcessor):
 
 if __name__ == "__main__":
     
-    # Initialize the NeXusBatchProcessor with the directory containing .nxs files
-    #processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
-    processor = NeXusBatchProcessor("/Users/lotzegud/P08/test_folder/")
-    
-    # Process the files and get the DataFrame
-    #df = processor.get_dataframe()
-    # Print the DataFrame
-    #print("Processed DataFrame:")
-    #print(df.head())
-    
-    df_lazy= processor.get_lazy_dataframe()
-    print(df_lazy.head())
-    
-    print(100*"\N{hot pepper}")
-       
-    #print(df_lazy.collect_schema().names)
-    for col_name in df_lazy.schema:
-        print(col_name)
-     
-    df= processor.get_dataframe()
-    print(df.head())
-    
-    # Print the structure list (optional, for debugging)
-    #print("\nStructure List:")
-    #structure_list = processor.get_structure_list()
-    #for item in structure_list:
-    #    print(item)
-    
-        
-    #print(df["filename"])
-    #print(f'\n')
-    #print(df.columns)
-    #print(df.columns[-1])   
-    
-    #How to search columns
-    #matching_columns = [col for col in df.columns if "scan_" in col]
-    #print(matching_columns)
-    #processor.update_files()
-
-    
-    with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as f:
-        if "/scan/start_time" in f:
-            dataset = f["/scan/start_time"]
-            print("Dataset Shape:", dataset.shape)
-            print("Dataset Dtype:", dataset.dtype)
-            print("Dataset Value:", dataset[()])
-            print("Dataset Attributes:", dict(dataset.attrs))
-
-    print(100*"\N{hot pepper}")
-
-    with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as h5file:
-        print(type(h5file["/scan/data"]))
-        print(h5file["/scan/data"].name)
-        print(h5file["/scan/data"].file.filename)
-
-    with h5py.File("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02347.nxs", "r") as f:
-        scan_data_group = f["/scan/data"]
-        print("Keys in /scan/data:", list(scan_data_group.keys()))  # Check contents
-        print("Attributes:", dict(scan_data_group.attrs))  # Check if datasets are stored as attributes
-
-
-
-    
-    print(100*"\N{pineapple}")
-
-    try:
-        with h5py.File("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs", "r", libver="latest") as f:
-            print("File opened successfully.")
-            print("Keys:", list(f.keys()))
-    except Exception as e:
-        print(f"Error opening file: {e}")
-
-
-    with h5py.File("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs", "r") as f: 
-        scan_data_group = f["/scan/data"]
-        print("Keys in /scan/data:", list(scan_data_group.keys()))  # Check contents
-        print("Attributes:", dict(scan_data_group.attrs))  # Check if datasets are stored as attributes
-
-
-    print(100*"\N{strawberry}")
-    
-    
-    #sproc=NeXusProcessor("/Users/lotzegud/P08/test_folder/h2o_2024_10_16_01116.nxs")
-    #res= sproc._extract_scan_metadata("/scan","h2o_2024_10_16_01116.nxs")
-    #res= sproc.process()
-    
-    
-    
-    from pathlib import Path
-    import h5py
-
-    # Define file path using pathlib
-    file_path = Path("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs")
-     
-    '''  
-    # Check if the file exists
-    if not file_path.exists():
-        print(f"Error: File does not exist at {file_path.resolve()}")
-    else:
-        with h5py.File(file_path, "r") as f:
-            def print_structure(name, obj):
-                print(f"Path: {name}")
-                for attr in obj.attrs:
-                    print(f"  - Attribute: {attr} = {obj.attrs[attr]}")
-
-            f.visititems(print_structure)
-            
-    
-            
-    with h5py.File(file_path, "r") as f:
-        for key in f:
-            try:
-                obj = f[key]
-            except OSError as e:
-                print(f"Broken link found: {key} - {e}")
-            
-    with h5py.File(file_path, "r") as f:
-        def check_links(name, obj):
-            if isinstance(obj, h5py.SoftLink):
-                print(f"Soft link found: {name} -> {obj.path}")
-
-        f.visititems(check_links)
-        
-    '''
-    if not file_path.exists():
-        print(f"Error: File does not exist at {file_path.resolve()}")
-    else:
-        with h5py.File(file_path, "r") as f:
-            def search_for_paths(name, obj):
-                # Check attributes
-                for attr, value in obj.attrs.items():
-                    if isinstance(value, (bytes, str)) and "nxs" in value.lower():
-                        print(f"Potential file reference in attribute: {name}/{attr} -> {value}")
-
-                # Check dataset contents
-                if isinstance(obj, h5py.Dataset) and obj.dtype.kind in {'S', 'U'}:  # String types
-                    data = obj[()]
-                    if isinstance(data, np.ndarray):  # Handle array of strings
-                        for item in data:
-                            if isinstance(item, (bytes, str)) and "nxs" in item.lower():
-                                print(f"Potential file reference in dataset: {name} -> {item}")
-                    elif isinstance(data, (bytes, str)) and "nxs" in data.lower():
-                        print(f"Potential file reference in dataset: {name} -> {data}")
-
-            f.visititems(search_for_paths)
-
-    print(100*"\N{banana}")
-    print(100*"\N{banana}")
-    
-    
-    # h5ls -r /Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs
-    # that allows you to inspect the structure of an HDF5 file without using Python.
-    # -r recursive mode
     
     # Load NeXusProcessor class (ensure the class definition is included in your script or imported)
     file_path = Path("/Users/lotzegud/P08/11019623/raw/h2o_2024_10_16_01116.nxs")
