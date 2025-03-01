@@ -10,15 +10,22 @@ class BaseProcessor:
         self.processed_files = {}  # Stores processed data for each file (path -> data)
         self._df = None  # Cached DataFrame
 
-    def _convert_epoch_to_human_readable(self, epoch_time: float) -> str:
-        """Convert epoch time (UNIX seconds) to a human-readable format."""
+    def _convert_epoch_to_human_readable(self, epoch_time: Union[float, dict]) -> Optional[str]:
+        """Convert epoch time (UNIX seconds) to a human-readable format, handling lazy references."""
+        
         if epoch_time is None:
             return None
+
+        # Resolve lazy datasets before conversion
+        if isinstance(epoch_time, dict) and "lazy" in epoch_time:
+            epoch_time = epoch_time["lazy"]()  # Evaluate lazily
+
         try:
             return datetime.fromtimestamp(epoch_time).strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError):
             logging.warning(f"Invalid epoch_time: {epoch_time}")
             return None
+
 
     def _add_human_readable_time(self, file_data: dict) -> dict:
         """Add a human-readable time column if an 'epoch' dataset is present."""
