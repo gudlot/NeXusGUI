@@ -68,6 +68,9 @@ class NeXusProcessor:
                 scan_metadata = self._extract_scan_metadata(nx_entry)
                 print(100*"\N{rainbow}")
                 self.data_dict.update(scan_metadata)
+                print(self.data_dict["scan_command"])
+                print(self.data_dict["scan_id"])
+                print(100*"\N{hot pepper}")
                     
                 # Log broken links
                 broken_links = [k for k, v in self.structure_dict.items() if v.get("type") == "broken_link"]
@@ -182,6 +185,7 @@ class NeXusProcessor:
         """Extracts scan metadata from a NeXus file and returns it as a dictionary."""
         
         metadata = {}
+        program_name_path = f"{self.nx_entry_path}/program_name"
         print(100*"\N{cherries}")
     
         
@@ -191,15 +195,16 @@ class NeXusProcessor:
         if "program_name" in nx_entry:
             try:
                 program_name_dataset = nx_entry["program_name"]
-                metadata["program_name"] = (
-                    program_name_dataset[()].decode()
-                    if isinstance(program_name_dataset[()], bytes)
+                metadata[program_name_path] = {
+                    "value" : 
+                    (program_name_dataset[()].decode() if isinstance(program_name_dataset[()], bytes)
                     else program_name_dataset[()]
                 )
+                }
 
-                # Extract attributes efficiently
+                # Extract attributes efficiently and ensure they are stored with "value"
                 metadata.update({
-                    key: (value.decode() if isinstance(value, bytes) else str(value))
+                    key: {"value": (value.decode() if isinstance(value, bytes) else str(value))}
                     for key in ["scan_command", "scan_id"]
                     if (value := program_name_dataset.attrs.get(key, "N/A")) is not None
                 })
@@ -223,6 +228,8 @@ class NeXusProcessor:
         }
 
         for key, info in self.data_dict.items():
+            print(key, info)
+            
             value = info.get("value")
             unit = info.get("unit")  # May be None
 
