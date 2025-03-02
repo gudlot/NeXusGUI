@@ -4,6 +4,7 @@ import logging
 
 from datetime import datetime
 from pathlib import Path 
+from typing import Optional, Union
 
 class BaseProcessor:
     def __init__(self):
@@ -50,6 +51,26 @@ class BaseProcessor:
             file_data["human_readable_time"] = self._convert_epoch_to_human_readable(epoch_value)
 
         return file_data
+
+
+    def _convert_start_time_to_human_readable(self, file_data: dict) -> dict:
+        """Convert start_time (ISO format) to a human-readable format and store it in file_data."""
+        for key in file_data:
+            if "start_time" in key:  # Check if key contains 'start_time'
+                start_time = file_data[key]
+                
+                if isinstance(start_time, bytes):  # Decode if stored as bytes
+                    start_time = start_time.decode()
+
+                try:
+                    dt_obj = datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%S.%f%z")
+                    human_readable = dt_obj.strftime("%Y-%m-%d %H:%M:%S")  # No timezone, otherwise %Z
+                    file_data["human_start_time"] = human_readable  # Store in dictionary
+                except ValueError:
+                    print(f"Warning: Could not parse start_time '{start_time}'")
+
+        return file_data  # Return updated dictionary
+
 
     
     def _add_filename(self, file_data: dict, file_path: Path) -> dict:
