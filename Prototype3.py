@@ -72,14 +72,19 @@ st.markdown("""
 
 
 
-
 class FileFilterApp:
-    def __init__(self, default_path: str = "/Users/lotzegud/P08/fio_nxs_and_cmd_tool/" ):
-        self.path = default_path
+    def __init__(self, default_path: str = ""):
+        """Initialize FileFilterApp with session state and processors."""
+        # Use session state if available; otherwise, use the default
+        if "current_path" not in st.session_state:
+            st.session_state["current_path"] = default_path
+
+        self.path = st.session_state["current_path"]
         self.file_filter = ""
         self.extension_filter = ""
         
         logger.debug(f"Current directory path: {self.path}")
+
         
         self.selected_files = []
         self.selected_metadata = None
@@ -126,18 +131,17 @@ class FileFilterApp:
     def _render_left_column(self):
         st.header("File Selection")
 
-        # Input field for directory path
-        new_path = st.text_input(
-            "Enter the directory path:", 
-            value=self.path  # No need for a fallback if self.path is always set
-        )
+        # Get user input for the directory path
+        new_path = st.text_input("Enter the directory path:", value=st.session_state["current_path"])
 
-        # Check if the path has changed
-        if new_path != self.path:
+        # Update path only if it actually changed
+        if new_path and new_path != st.session_state["current_path"]:
             if Path(new_path).is_dir():
-                # First, update session state directly
+                logger.info(f"Updating path to: {new_path}")
+
+                # Update session state and class variable
                 st.session_state["current_path"] = new_path
-                self.path = st.session_state["current_path"]  # Ensure self.path aligns
+                self.path = new_path
 
                 # Reset selected files and metadata
                 self.selected_files = []
@@ -145,14 +149,11 @@ class FileFilterApp:
                 st.session_state["selected_files"] = []
                 st.session_state["selected_metadata"] = None
 
-                # Clear cached data and reinitialize processors
+                # Clear cache and reinitialize processors
                 st.cache_data.clear()
                 self._initialize_processors()
 
-                logger.info(f"Path changed to: {self.path}")  # Log after setting state
-
-                # Now trigger a rerun after state updates
-                st.experimental_set_query_params(path=new_path)  # Alternative persistence
+                # Rerun to refresh UI
                 st.rerun()
             else:
                 st.error(f"Invalid directory: {new_path}")
@@ -314,10 +315,10 @@ class FileFilterApp:
         if len(created_values) != len(combined_metadata):
             raise ValueError(f"Mismatch: combined_metadata ({len(combined_metadata)}) vs created_values ({len(created_values)})")
 
-        # Add "Created" column safely
-        combined_metadata = combined_metadata.with_columns([
-            pl.Series("Created", created_values)
-        ])
+        ## Add "Created" column safely
+        #combined_metadata = combined_metadata.with_columns([
+        #    pl.Series("Created", created_values)
+        #])
 
 
         # Sort by filename
@@ -396,7 +397,10 @@ class FileFilterApp:
 
         valid_extensions = (".fio", ".nxs") if ext_filter == "All" else (ext_filter,)
         # List files in the directory (non-recursive)
-        files = [f.name for f in path.iterdir() if f.is_file() and f.suffix in valid_extensions]
+        #files = [f.name for f in path.iterdir() if f.is_file() and f.suffix in valid_extensions]
+        files = [f.name for f in path.glob("*") if f.is_file() and f.suffix in valid_extensions]
+
+        
         
         # Log the files found in the directory
         logger.debug(f"Files found in directory: {files}")
@@ -430,12 +434,14 @@ class FileFilterApp:
                 df_nxs = nexus_processor.get_lazy_dataframe(nxs_files)
                 #The |= operator in Python is a shorthand for merging dictionaries, introduced in Python 3.9.
                 # It is functionally equivalent to dict.update() but preserves ordering.
-                column_names |= {col: None for col in df_nxs.schema.keys()}
+                #column_names |= {col: None for col in df_nxs.schema.keys()}
+                column_names |= {col: None for col in df_nxs.collect().columns}
 
             if fio_files:
                 fio_processor = FioBatchProcessor(path)
                 df_fio = fio_processor.get_dataframe(fio_files)
-                column_names |= {col: None for col in df_fio.columns}
+                column_names |= {col: None for col in df_nxs.collect().columns}
+
 
         return column_names  # Ensuring order is preserved
 
