@@ -482,7 +482,7 @@ class FileFilterApp:
                     st.error("You must select either X1 or X2 and Y1 for plotting.")
                     return
 
-                self._plot_data(x_axis, y_axis, z_axis, normalize)
+                self.plot_data(x_axis, y_axis, z_axis, normalize)
 
 
 
