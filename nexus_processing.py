@@ -371,6 +371,9 @@ class NeXusBatchProcessor(BaseProcessor):
             
             # Add human-readable time if 'epoch' is present
             file_data = self._add_human_readable_time(file_data)
+            
+            # Add human-readable start_time if present
+            file_data = self._convert_start_time_to_human_readable(file_data)
 
             # Store data **without forcing eager evaluation**
             self.processed_files[str_path] = file_data  
@@ -383,14 +386,14 @@ class NeXusBatchProcessor(BaseProcessor):
             self._df = self._build_dataframe(resolve=False)  # Keep lazy references
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
-        """Return a LazyFrame containing only filename, scan_id, and scan_command."""
-        #TODO:Remmber u can use latter .collect, i.e. get_core_metadata.collect() to get the values
+        """Return a LazyFrame containing only filename, scan_id, scan_command, and human_start_time."""
         
         self.process_files(force_reload)
         if self._df is None:
             raise ValueError("No processed data available.")
         
-        return self._df.lazy().select(["filename", "scan_id", "scan_command"])
+        return self._df.lazy().select(["filename", "scan_id", "scan_command", "human_start_time"])
+
 
     def _resolve_lazy_value(self, value):
         """Helper function to resolve lazy datasets and handle soft links.
