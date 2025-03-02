@@ -6,9 +6,7 @@ import logging
 from functools import lru_cache
 from typing import Optional, Tuple, Dict, Any
 from base_processing import BaseProcessor
-from functools import partial
-import traceback
-import pprint
+
 
 # Configure the logger
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
@@ -366,15 +364,14 @@ class NeXusBatchProcessor(BaseProcessor):
             processor = NeXusProcessor(str_path)
             file_data = processor.process()
 
+
             if not file_data:
                 logging.warning(f"Skipping {str_path} due to broken external links or missing data.")
                 continue  
             
-            
             # Add human-readable time if 'epoch' is present
-            #file_data = self._add_human_readable_time(file_data)
-            
-           
+            file_data = self._add_human_readable_time(file_data)
+
             # Store data **without forcing eager evaluation**
             self.processed_files[str_path] = file_data  
             self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
@@ -383,17 +380,7 @@ class NeXusBatchProcessor(BaseProcessor):
         
         # Store lazy references and soft links properly in `_df`**
         if self.processed_files:
-            first_file = next(iter(self.processed_files.values()))  # Get a sample file
-            columns = ["filename"] + [col for col in first_file.keys() if col != "filename"]
-
-            # Construct DataFrame with proper order, preserving lazy loading
-            self._df = pl.DataFrame([
-                {k: v["lazy"] if isinstance(v, dict) and "lazy" in v else
-                v["source"] if isinstance(v, dict) and "source" in v else v
-                for k, v in file_data.items()}
-                for file_data in self.processed_files.values()
-            ]).select(columns)  # Ensure column order
-
+            self._df = self._build_dataframe(resolve=False)  # Keep lazy references
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return a LazyFrame containing only filename, scan_id, and scan_command."""
@@ -405,67 +392,80 @@ class NeXusBatchProcessor(BaseProcessor):
         
         return self._df.lazy().select(["filename", "scan_id", "scan_command"])
 
+    def _resolve_lazy_value(self, value):
+        """Helper function to resolve lazy datasets and handle soft links.
+
+        - If `value` is a dict containing `"lazy"`, it evaluates the dataset.
+        - If `value` is a dict containing `"source"`, it keeps the reference.
+        - Otherwise, returns the value as-is.
+        """
+        if isinstance(value, dict):
+            if "lazy" in value:
+                try:
+                    return value["lazy"]()  # Evaluate dataset
+                except Exception as e:
+                    logging.warning(f"Failed to resolve lazy dataset: {e}")
+                    return None  # Return None to avoid crashes
+            if "source" in value:
+                return f"Reference: {value['source']}"  # Keep soft link as reference
+
+        return value  # Return direct values
+
+
+    def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
+        """Constructs a Polars DataFrame from processed files.
+        
+        - If `resolve` is True, it evaluates lazy-loaded datasets.
+        - If `resolve` is False, it keeps lazy references.
+        """
+        def resolve_value(value):
+            """Ensure values are either resolved or stored as references."""
+            if isinstance(value, dict):
+                if "lazy" in value and resolve:
+                    return value["lazy"]()  # Evaluate dataset
+                elif "lazy" in value:
+                    return "<Lazy Dataset>"  # Placeholder for lazy references
+                if "source" in value:
+                    return value["source"]  # Keep soft link as a reference
+            return value  # Return normal values
+
+        return pl.DataFrame([
+            {k: resolve_value(v) for k, v in file_data.items()}
+            for file_data in self.processed_files.values()
+        ])
+
+
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
         """Return the processed data as a Polars DataFrame with evaluated datasets."""
         self.process_files(force_reload)
+        
+        # Return cached `_df` if available
+        if self._df is not None:
+            return self._df
 
-        def resolve_lazy(value):
-            """Helper function to evaluate lazy datasets properly."""
-            if isinstance(value, dict):
-                if "lazy" in value:
-                    return value["lazy"]()  # Resolve lazy dataset
-                if "source" in value:
-                    return f"Reference: {value['source']}"  # Keep soft link as reference
-            return value  # Return normal value
-
-        return pl.DataFrame([
-            {k: resolve_lazy(v) for k, v in file_data.items()}
-            for file_data in self.processed_files.values()
-        ])
+        # Use `_resolve_lazy_value` for evaluation
+        return self._build_dataframe(resolve=True)  # Now loads actual values
 
 
 
     def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return the processed data as a lazy-loaded Polars DataFrame."""
-        
         self.process_files(force_reload)
+        
+        if self._df is None:
+            raise ValueError("No processed data available.")
+        
+        return self._df.lazy()
 
-        return pl.LazyFrame([
-            {k: v["lazy"] if isinstance(v, dict) and "lazy" in v else v  # Preserve lazy function
-            for k, v in file_data.items()}
-            for file_data in self.processed_files.values()
-        ])
-    
     
     def evaluate_lazy_column(self, df: pl.DataFrame, column_name: str) -> pl.Series:
-        """Evaluate a specific lazy-loaded column when needed.
-        
-        # Step 1: Load DataFrame
-        df = processor.get_dataframe()  
-
-        # Step 2: Evaluate specific lazy dataset column
-        df = df.with_columns(processor.evaluate_lazy_column(df, "/scan/data/lambda_roi1"))
-
-        # Step 3: Print results
-        print(df.select("/scan/data/lambda_roi1"))
-        
-        """
-        
+        """Evaluate a specific lazy-loaded column in a Polars DataFrame."""
         if column_name not in df.columns:
             raise ValueError(f"Column '{column_name}' not found in DataFrame.")
 
-        def resolve_value(value):
-            """Helper function to resolve lazy datasets and handle soft links."""
-            if isinstance(value, dict):
-                if "lazy" in value:
-                    return value["lazy"]()  # Evaluate dataset
-                if "source" in value:
-                    return f"Reference: {value['source']}"  # Keep soft link as reference
-            return value  # Return normal values directly
-        
-        return df[column_name].apply(resolve_value)
-
+        return df[column_name].map_elements(self._resolve_lazy_value, return_dtype=pl.Object)
     
+
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
         self.process_files(force_reload)
@@ -520,20 +520,29 @@ if __name__ == "__main__":
     
     # Process the files and get the DataFrame
     df = processor.get_dataframe()
+              
+    #for col in df.columns:
+    #    print(col)   
+    
+    
     # Print the DataFrame
     print("Processed DataFrame:")
-    print(df.head())
     
-    #df_lazy= processor.get_lazy_dataframe()
-    #print(df_lazy.head())
+    pl.Config.set_tbl_rows(10)  # Set maximum displayed row
+    #pl.Config.set_tbl_rows(None)  # Show all rows
+    print(df)
+       
     
     print(100*"\N{hot pepper}")
-    
-    for col in df.columns:
-        print(col)
-        
-        
+
+
     print(df["/scan/instrument/source/probe"])
+    
+    
+    print(100*"\N{blueberries}")
+    
+    df_lazy= processor.get_lazy_dataframe()
+    print(df_lazy.head())
        
     #print(df_lazy.collect_schema().names)
     #for col_name in df_lazy.schema:
@@ -541,3 +550,7 @@ if __name__ == "__main__":
     #df= processor.get_dataframe()
     #print(df.head())
 
+    print(100*"\N{mango}")
+    #now eager, and it looks like ti works 
+    df_eager = df_lazy.collect()
+    print(df_eager.head())  # Now it prints real data
