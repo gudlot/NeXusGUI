@@ -230,11 +230,7 @@ class FileFilterApp:
                 
 
         if self.path and Path(self.path).is_dir():
-            # Ensure session state keys exist
-            if "extension_filter" not in st.session_state:
-                st.session_state["extension_filter"] = "All"
-            if "file_filter" not in st.session_state:
-                st.session_state["file_filter"] = ""
+            
 
             # File type selection (no duplicate widgets)
             st.radio("Select file type:", ["All", ".fio", ".nxs"], horizontal=True, key="extension_filter")
