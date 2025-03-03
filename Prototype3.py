@@ -86,7 +86,7 @@ class FileFilterApp:
         self.selected_metadata = None
         self.processed_data = {}
         
-        self.nexus_processor = NeXusBatchProcessor(self.path)
+        self.nxs_processor = NeXusBatchProcessor(self.path)
         self.fio_processor = FioBatchProcessor(self.path)
         self.controller = None
            
@@ -107,14 +107,30 @@ class FileFilterApp:
         for key, value in session_state_defaults.items():
             if key not in st.session_state:
                 st.session_state[key] = value
+                
+    @st.cache_data            
+    def load_nxs_files(self):
+        self.nxs_processor.get_lazy_dataframe()
+        
+    @st.cache_data
+    def load_fio_files(self)
+        self.fio_processor.get_dataframe()
+        
+    def _initialize_processors(self):
+        self.nxs_processor=NeXusBatchProcessor(self.path)
+        self.fio_processor = FioBatchProcessor(self.path)
+         
 
     def run(self):
         st.title("NeXus-Fio-File Plotting App")
         
-
+        # Load cached data in the GUI
+        nxs_df = load_nxs_files(self.path)
+        fio_df = load_fio_files(self.path)
+            
 
         # Initialize the controller with the DataFrames
-        self.controller = DataController(nexus_df, fio_df)
+        self.controller = DataController(nxs_df, fio_df)
 
         # Create two columns, with the right column wider for plotting
         col1, col2 = st.columns([2, 3])
@@ -124,8 +140,7 @@ class FileFilterApp:
 
         with col2:
             self._render_right_column()
-            
-    
+        
 
     def _render_left_column(self):
         st.header("File Selection")
@@ -142,15 +157,20 @@ class FileFilterApp:
                 st.session_state["current_path"] = new_path
                 self.path = new_path
 
-                # Reset selected files and metadata
+                # Reset class attributes 
+                self.file_filter = ""
+                self.extension_filter = ""
                 self.selected_files = []
                 self.selected_metadata = None
-                st.session_state["selected_files"] = []
-                st.session_state["selected_metadata"] = None
+                self.processed_data = {}
+                # Reset session state to defaults
+                self._initialize_session_state()
 
                 # Clear cache and reinitialize processors
                 st.cache_data.clear()
                 self._initialize_processors()
+                self.load_nxs_files()
+                self.load_fio_files()
 
                 # Rerun to refresh UI
                 st.rerun()
@@ -159,7 +179,10 @@ class FileFilterApp:
                                     
         if st.button("Force Reload"):
             st.cache_data.clear()
-            self.nexus_processor.process_files(force_reload=True)
+            self.load_nxs_files()
+            self.load_fio_files()
+            
+            self.nxs_processor.process_files(force_reload=True)
             self.fio_processor.process_files(force_reload=True)
             self.processed_data.clear()
             st.rerun()
@@ -266,7 +289,7 @@ class FileFilterApp:
         # Fetch metadata for .nxs files
         nxs_metadata = None
         if nxs_files:
-            nxs_metadata = self.nexus_processor.get_core_metadata().collect()
+            nxs_metadata = self.nxs_processor.get_core_metadata().collect()
 
         # Fetch metadata for .fio files
         fio_metadata = None
