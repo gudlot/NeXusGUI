@@ -122,8 +122,33 @@ class FileFilterApp:
     def _initialize_processors(self):
         self.nxs_processor=NeXusBatchProcessor(self.path)
         self.fio_processor = FioBatchProcessor(self.path)
-         
+        
+    def _reset_app(self, new_path: str):
+        # Update session state and class variable
+        st.session_state["current_path"] = new_path
+        self.path = new_path
 
+        # Reset class attributes 
+        self.file_filter = ""
+        self.extension_filter = ""
+        self.selected_files = []
+        self.selected_metadata = None
+        self.processed_data = {}
+        # Reset session state to defaults
+        self._initialize_session_state()
+
+        # Clear cache and reinitialize processors
+        #st.cache_data.clear() clears all cached data for functions decorated with @st.cache_data. 
+        #This is a global operation and affects all cached functions, not just the ones related to your file loading.
+        st.cache_data.clear()
+        self._initialize_processors()
+        self.load_nxs_files()
+        self.load_fio_files()
+
+        # Rerun to refresh UI
+        st.rerun()
+
+         
     def run(self):
         st.title("NeXus-Fio-File Plotting App")
         
@@ -158,37 +183,28 @@ class FileFilterApp:
 
                 # Update session state and class variable
                 st.session_state["current_path"] = new_path
-                self.path = new_path
-
-                # Reset class attributes 
-                self.file_filter = ""
-                self.extension_filter = ""
-                self.selected_files = []
-                self.selected_metadata = None
-                self.processed_data = {}
-                # Reset session state to defaults
-                self._initialize_session_state()
-
-                # Clear cache and reinitialize processors
-                st.cache_data.clear()
-                self._initialize_processors()
-                self.load_nxs_files()
-                self.load_fio_files()
-
-                # Rerun to refresh UI
-                st.rerun()
             else:
                 st.error(f"Invalid directory: {new_path}")
-                                    
-        if st.button("Force Reload"):
+                
+        col_reload, col_reset = st.columns([1, 1])
+        with col_reload:
+            if st.button("Force Reload"):
+            #Keep the session state intact. I just want to refresh the underlying data.            
+            # Clear the cache (this will force all cached functions to reload)
             st.cache_data.clear()
-            self.load_nxs_files()
-            self.load_fio_files()
+            # Force reload the data
+            # Reload the data (no need for force_reload=True since the cache is cleared), #TODO: I leave this comment for the moment still here, but I could remove the force_reload=Ture actually 
+            # Clearing the cache is a "sledgehammer" approach
+            self.load_nxs_files(force_reload=True)
+            self.load_fio_files(force_reload=True)
             
-            self.nxs_processor.process_files(force_reload=True)
-            self.fio_processor.process_files(force_reload=True)
+             # Clear processed data
             self.processed_data.clear()
             st.rerun()
+        with col_reset:
+            if st.button("Reset App"):
+                self._reset_app(st.session_state["current_path"])  # Reset using current path
+                
 
         if self.path and Path(self.path).is_dir():
             # Ensure session state keys exist
