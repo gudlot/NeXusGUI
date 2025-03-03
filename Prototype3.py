@@ -75,11 +75,8 @@ st.markdown("""
 class FileFilterApp:
     def __init__(self, default_path: str = ""):
         """Initialize FileFilterApp with session state and processors."""
-        # Use session state if available; otherwise, use the default
-        if "current_path" not in st.session_state:
-            st.session_state["current_path"] = default_path
-
-        self.path = st.session_state["current_path"]
+        
+        self.path = default_path
         self.file_filter = ""
         self.extension_filter = ""
         
