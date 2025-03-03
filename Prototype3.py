@@ -254,8 +254,11 @@ class FileFilterApp:
 
         if self._is_valid_directory():
             
-            # File type selection (no duplicate widgets)
-            st.radio("Select file type:", ["All", ".fio", ".nxs"], horizontal=True, key="extension_filter")
+            # File type selection
+            new_extension_filter = st.radio("Select file type:", ["All", ".fio", ".nxs"], horizontal=True, key="extension_filter")
+            if new_extension_filter != st.session_state["extension_filter"]:
+                st.session_state["extension_filter"] = new_extension_filter
+                st.rerun()
 
             # File name filter (triggers rerun automatically on change)
             st_keyup("Filter filenames by string:", key="file_filter", debounce=100) #debounce 100ms
