@@ -108,13 +108,16 @@ class FileFilterApp:
             if key not in st.session_state:
                 st.session_state[key] = value
                 
+    #Flexibility: The force_reload parameter allows you to control whether the data 
+    # should be reloaded from the source or fetched from the cache.
     @st.cache_data            
-    def load_nxs_files(self):
-        self.nxs_processor.get_lazy_dataframe()
-        
+    def load_nxs_files(self, force_reload: bool = False):
+        return self.nxs_processor.get_lazy_dataframe(force_reload=force_reload)
+            
     @st.cache_data
-    def load_fio_files(self)
-        self.fio_processor.get_dataframe()
+    def load_fio_files(self, force_reload: bool = False):
+        return self.fio_processor.get_dataframe(force_reload=force_reload)
+
         
     def _initialize_processors(self):
         self.nxs_processor=NeXusBatchProcessor(self.path)
