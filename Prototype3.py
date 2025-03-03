@@ -73,11 +73,56 @@ st.markdown("""
 
 
 
+import polars as pl
+import random
+from datetime import datetime, timedelta
+
+def generate_fake_fio_metadata(fio_files):
+    """Generates fake metadata for .fio files."""
+    
+    # Ensure fio_files is a list
+    if not isinstance(fio_files, list):
+        raise ValueError("fio_files must be a list")
+
+    num_files = len(fio_files)
+
+    data = {
+        "filename": fio_files,  # Length: num_files
+        "scan_id": [str(random.randint(1000, 9999)) for _ in range(num_files)],  # Match length
+        "scan_command": [f"Command_{i+1}" for i in range(num_files)],  # Match length  
+        "human_start_time": [
+            (datetime.now() - timedelta(days=random.randint(1, 30)))  
+            .strftime('%Y-%m-%d %H:%M:%S')  
+            for _ in range(num_files)
+        ],  # Match length
+    }
+    
+    # Create DataFrame
+    df = pl.DataFrame(data)
+
+    # Ensure correct types
+    df = df.with_columns([
+        pl.col("filename").cast(pl.Utf8),
+        pl.col("scan_id").cast(pl.Utf8),
+        pl.col("scan_command").cast(pl.Utf8),
+        pl.col("human_start_time").cast(pl.Utf8),
+    ])
+
+    return df
+
 class FileFilterApp:
     def __init__(self, default_path: str = ""):
         """Initialize FileFilterApp with session state and processors."""    
             
-        self.path = default_path
+
+        # Initialize session state if it doesn't exist
+        if "current_path" not in st.session_state:
+            st.session_state["current_path"] = default_path
+        
+        # Use the session state path instead of the default path
+        self.path = st.session_state["current_path"]
+            
+        
         if not self._is_valid_directory():
             logger.warning(f"Default path is invalid: {default_path}")
             self.path = ""  # Reset to empty if default path is invalid
@@ -106,13 +151,16 @@ class FileFilterApp:
             "selected_metadata": None,
             "extension_filter": "All",
             "file_filter": "",
-            "current_path": self.path,
         }
         
         for key, value in session_state_defaults.items():
             if key not in st.session_state:
                 st.session_state[key] = value
                 
+        # Initialize current_path only if it doesn't already exist
+        if "current_path" not in st.session_state:
+            st.session_state["current_path"] = self.path
+                    
     def _is_valid_directory(self, path: str = None) -> bool:
         """
         Check if the given path (or self.path if None) is set and points to a valid directory.
@@ -157,8 +205,12 @@ class FileFilterApp:
 
         
     def _initialize_processors(self):
-        self.nxs_processor=NeXusBatchProcessor(self.path)
+        """Reinitialize file processors for the current path."""
+        self.nxs_processor = NeXusBatchProcessor(self.path)
         self.fio_processor = FioBatchProcessor(self.path)
+
+        return self.nxs_processor, self.fio_processor
+
         
     def _reset_app(self, new_path: str = None):
         """
@@ -167,9 +219,20 @@ class FileFilterApp:
         Args:
             new_path (str, optional): The new directory path to set. If None, the current path is retained.
         """
+        
+        if new_path and not self._is_valid_directory(new_path):
+            st.error(f"Invalid directory: {new_path}")
+            return
+
+            
         # Update path if a new path is provided
         if new_path:
-            self._update_path(new_path)
+            logger.debug(75 * "\N{pineapple}")
+            logger.debug(f"Updating path: {new_path}")
+            logger.debug(75 * "\N{pineapple}")
+            self.path = new_path  # Ensure self.path updates first
+            st.session_state["current_path"] = new_path  # Keep session state in sync
+
 
         # Reset class attributes 
         self.file_filter = ""
@@ -184,14 +247,21 @@ class FileFilterApp:
         #st.cache_data.clear() clears all cached data for functions decorated with @st.cache_data. 
         #This is a global operation and affects all cached functions, not just the ones related to your file loading.
         st.cache_data.clear()
-        self._initialize_processors()
-        # Clear cache and reload data using standalone functions
-        nxs_df = self.load_nxs_files(self.path, force_reload=True)
-        fio_df = self.load_fio_files(self.path, force_reload=True)
+        #Reinitialize processors and use them**
+        self.nxs_processor, self.fio_processor = self._initialize_processors()
+
+        #Ensure force reload actually loads new data**
+        self.nxs_df = self.nxs_processor.get_lazy_dataframe(force_reload=True)
+        self.fio_df = self.fio_processor.get_dataframe(force_reload=True)
+           
         
         # Update the controller
-        self.controller = DataController(nxs_df, fio_df)
+        self.controller = DataController(self.nxs_df, self.fio_df)
 
+        logger.debug(75 * "\N{T-Rex}")
+        logger.debug(f"Path after reset: {self.path}")  # Confirm the path is updated
+        logger.debug(75 * "\N{T-Rex}")
+        
         # Rerun to refresh UI
         st.rerun()
 
@@ -205,7 +275,7 @@ class FileFilterApp:
                 
 
         # Initialize the controller with the DataFrames
-        self.controller = DataController(nxs_df, fio_df)
+        self.controller = DataController(self.nxs_df, self.fio_df)
 
         # Create two columns, with the right column wider for plotting
         col1, col2 = st.columns([2, 3])
@@ -215,21 +285,40 @@ class FileFilterApp:
 
         with col2:
             self._render_right_column()
-        
+       
+    # Define the callback function to reset the app when the path changes
+    def _on_path_change(self):
+        self._reset_app(st.session_state["path_input"])    
 
     def _render_left_column(self):
         st.header("File Selection")
-
-        # Get user input for the directory path
-        new_path = st.text_input("Enter the directory path:", value=st.session_state["current_path"])
-                
+        
+        
+        # Get user input for the directory path with an `on_change` event
+        new_path=st.text_input(
+            "Enter the directory path:", 
+            value=st.session_state.get("current_path", self.path), 
+            key="path_input",
+            on_change=self._on_path_change
+        )
+        
+        # Debugging: Log the current and new path
+        logger.debug(75 * "\N{aubergine}")
+        logger.debug(f"Current path: {st.session_state.get('current_path')}")
+        logger.debug(f"New path: {new_path}")
+        logger.debug(75 * "\N{rainbow}")
+        
         # Update path only if it actually changed
-        if new_path and new_path != st.session_state["current_path"]:
+        if new_path and new_path != st.session_state.get("current_path", self.path):
             try:
                 # Reset the app with the new path
                 self._reset_app(new_path)
             except ValueError as e:
                 st.error(f"Invalid directory: {new_path}. Error: {e}")
+
+                
+        st.text_input("\N{hot pepper} Current Path:", st.session_state.get("current_path", ""), disabled=True)
+
                     
         col_reload, col_reset = st.columns([1, 1])
         with col_reload:
@@ -240,14 +329,15 @@ class FileFilterApp:
                 # Force reload the data
                 # Reload the data (no need for force_reload=True since the cache is cleared), #TODO: I leave this comment for the moment still here, but I could remove the force_reload=Ture actually 
                 # Clearing the cache is a "sledgehammer" approach
-                nxs_df = self.load_nxs_files(self.path, force_reload=True)
-                fio_df = self.load_fio_files(self.path, force_reload=True)
+                self.nxs_df = self.load_nxs_files(self.path, force_reload=True)
+                self.fio_df = self.load_fio_files(self.path, force_reload=True)
                 
                 # Update the controller
-                self.controller = DataController(nxs_df, fio_df)
+                self.controller = DataController(self.nxs_df, self.fio_df)
 
                 # Clear processed data
                 self.processed_data.clear()
+                logger.debug(f"Force Reload triggered")
                 st.rerun()
         with col_reset:
             if st.button("Reset App"):
@@ -272,11 +362,6 @@ class FileFilterApp:
             # Render the second section for selecting data to plot
             self._render_plot_options()
 
-    def _update_filtered_files(self):
-        """Updates session state to trigger a rerun when filters change."""
-        st.session_state["file_filter"] = st.session_state.get("file_filter", "")
-        st.session_state["extension_filter"] = st.session_state.get("extension_filter", "")
-        st.re_run()
         
     @staticmethod    
     def compute_optimal_column_widths(
@@ -342,15 +427,39 @@ class FileFilterApp:
         logger.debug(f"NXS files: {len(nxs_files)}")
         logger.debug(f"FIO files: {len(fio_files)}")
 
-        # Fetch metadata for .nxs files
-        nxs_metadata = None
-        if nxs_files:
-            nxs_metadata = self.nxs_processor.get_core_metadata().collect()
 
-        # Fetch metadata for .fio files
+
+            # Fetch metadata for .nxs files from cached data frame
+        nxs_metadata = None
+        if nxs_files and hasattr(self, "nxs_df"):
+            #nxs_metadata = self.nxs_df.filter(
+            #    pl.col("filename").is_in(nxs_files)
+            #).select(["filename", "scan_id", "scan_command", "human_start_time"]).collect()  # <-- Ensure eager execution
+            nxs_metadata = (
+                self.nxs_df
+                .filter(pl.col("filename").is_in(nxs_files))
+                .select(["filename", "scan_id", "scan_command", "human_start_time"])
+                .collect()  # Collect only after filtering to minimize memory usage
+            )
+
+
+        # Fetch metadata for .fio files from cached data frame
         fio_metadata = None
+        #if fio_files and hasattr(self, "fio_df"):
+        #    fio_metadata = self.fio_df.filter(
+        #        pl.col("filename").is_in(fio_files)
+        #    ).select(["filename", "scan_id", "scan_command", "human_start_time"])
         if fio_files:
-            fio_metadata = self.fio_processor.get_core_metadata()
+            fio_metadata = generate_fake_fio_metadata(fio_files)
+
+        # Fetch metadata for .nxs files
+        #nxs_metadata = None
+        #if nxs_files:
+        #    nxs_metadata = self.nxs_processor.get_core_metadata().collect()
+        # Fetch metadata for .fio files
+        #fio_metadata = None
+        #if fio_files:
+        #    fio_metadata = self.fio_processor.get_core_metadata()
 
         # Combine metadata into a single DataFrame
         if nxs_metadata is not None and fio_metadata is not None:
@@ -495,10 +604,8 @@ class FileFilterApp:
         return files
 
         
-    
-    @staticmethod
     @st.cache_data
-    def _get_column_names(selected_files, path):
+    def _get_column_names(selected_files: list[str], path: str) -> dict[str, None]:
         column_names = {}
 
         if selected_files:
@@ -508,18 +615,15 @@ class FileFilterApp:
             if nxs_files:
                 nexus_processor = NeXusBatchProcessor(path)
                 df_nxs = nexus_processor.get_lazy_dataframe(nxs_files)
-                #The |= operator in Python is a shorthand for merging dictionaries, introduced in Python 3.9.
-                # It is functionally equivalent to dict.update() but preserves ordering.
-                #column_names |= {col: None for col in df_nxs.schema.keys()}
-                column_names |= {col: None for col in df_nxs.collect().columns}
+                column_names |= {col: None for col in df_nxs.schema.keys()}  # No .collect() here
 
             if fio_files:
                 fio_processor = FioBatchProcessor(path)
                 df_fio = fio_processor.get_dataframe(fio_files)
-                column_names |= {col: None for col in df_nxs.collect().columns}
+                column_names |= {col: None for col in df_fio.columns}  # Corrected
 
+        return column_names
 
-        return column_names  # Ensuring order is preserved
 
 
     def _render_plot_options(self):
@@ -529,27 +633,31 @@ class FileFilterApp:
             time_column = "/scan/data/epoch"
             time_options = [f"{time_column} (Unix)", f"{time_column} (Datetime)"]
 
-            # Pass required arguments to the static method
-            column_names = self._get_column_names(self.selected_files, self.path)
-            column_names.pop(time_column, None)  # Remove time_column directly
+            # Ensure we don’t modify cached data in place
+            column_names = self._get_column_names(self.selected_files, self.path).copy()
+            column_names.pop(time_column, None)  # Remove time_column safely
+
+            if not column_names:
+                st.warning("No valid columns found for plotting.")
+                return
 
             col1, col2 = st.columns([3, 1])
 
             with col1:
-                x1 = st.selectbox("Select X1 (Time):", time_options, key="x1")
-                x2 = st.selectbox("Select X2:", list(column_names.keys()), key="x2")
-                y1 = st.selectbox("Select Y1-axis:", list(column_names.keys()), key="y1")
-                z = st.selectbox("Select Normalization Column:", list(column_names.keys()), key="z")
+                x1 = st.selectbox("Select X1 (Time):", time_options, key="plot_options_x1")
+                x2 = st.selectbox("Select X2:", list(column_names.keys()), key="plot_options_x2")
+                y1 = st.selectbox("Select Y1-axis:", list(column_names.keys()), key="plot_options_y1")
+                z = st.selectbox("Select Normalization Column:", list(column_names.keys()), key="plot_options_z")
 
             with col2:
-                x1_radio = st.radio("", ["Use", "Ignore"], key="x1_radio")
-                x2_radio = st.radio("", ["Use", "Ignore"], key="x2_radio")
-                y1_radio = st.radio("", ["Use", "Ignore"], key="y1_radio")
-                z_radio = st.radio("", ["Use", "Ignore"], key="z_radio", index=1)  # Default to Ignore
+                x1_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x1_radio")
+                x2_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x2_radio")
+                y1_radio = st.radio("", ["Use", "Ignore"], key="plot_options_y1_radio")
+                z_radio = st.radio("", ["Use", "Ignore"], key="plot_options_z_radio", index=1)  # Default to Ignore
 
-            normalize = st.checkbox("Normalize data", value=False)
+            normalize = st.checkbox("Normalize data", value=False, key="plot_options_normalize")
 
-            if st.button("Plot"):
+            if st.button("Plot", key="plot_options_plot"):
                 x_axis = x1 if x1_radio == "Use" else (x2 if x2_radio == "Use" else None)
                 y_axis = y1 if y1_radio == "Use" else None
                 z_axis = z if z_radio == "Use" else None
@@ -559,8 +667,6 @@ class FileFilterApp:
                     return
 
                 self.plot_data(x_axis, y_axis, z_axis, normalize)
-
-
 
 
     def plot_data(selected_files, combined_metadata, x_column, y_columns, z_column=None):
@@ -627,21 +733,6 @@ class FileFilterApp:
         else:
             st.write("No data to plot yet.")
             
- 
-    def _process_time_column(self, column: str):
-        if column == "/scan/data/epoch (Datetime)":
-            return self._convert_unix_to_datetime("/scan/data/epoch")
-        return column
-
-    def _convert_unix_to_datetime(self, column: str):
-        for file in self.selected_files:
-            if file.endswith(".nxs"):
-                processor = NexusProcessor(file)
-                df = processor.get_dataframe()
-                if column in df.columns:
-                    df = df.with_columns(pl.col(column).map(lambda x: datetime.datetime.utcfromtimestamp(x)))
-                return df.columns
-        return column
  
  
 
