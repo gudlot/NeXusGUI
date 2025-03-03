@@ -10,6 +10,7 @@ import re
 import h5py 
 from nexus_processing import NeXusBatchProcessor
 from fio_processing import FioBatchProcessor
+from data_controller import DataController
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="st_aggrid")
@@ -109,14 +110,20 @@ class FileFilterApp:
                 st.session_state[key] = value
                 
     #Flexibility: The force_reload parameter allows you to control whether the data 
-    # should be reloaded from the source or fetched from the cache.
-    @st.cache_data            
-    def load_nxs_files(self, force_reload: bool = False):
-        return self.nxs_processor.get_lazy_dataframe(force_reload=force_reload)
-            
+    # should be reload
+    @staticmethod
     @st.cache_data
-    def load_fio_files(self, force_reload: bool = False):
-        return self.fio_processor.get_dataframe(force_reload=force_reload)
+    def load_nxs_files(path: str, force_reload: bool = False):
+        """Load NeXus files as a lazy dataframe (cached)."""
+        processor = NeXusBatchProcessor(path)
+        return processor.get_lazy_dataframe(force_reload=force_reload)
+
+    @staticmethod
+    @st.cache_data
+    def load_fio_files(path: str, force_reload: bool = False):
+        """Load FIO files as a dataframe (cached)."""
+        processor = FioBatchProcessor(path)
+        return processor.get_dataframe(force_reload=force_reload)
 
         
     def _initialize_processors(self):
@@ -142,8 +149,12 @@ class FileFilterApp:
         #This is a global operation and affects all cached functions, not just the ones related to your file loading.
         st.cache_data.clear()
         self._initialize_processors()
-        self.load_nxs_files()
-        self.load_fio_files()
+        # Clear cache and reload data using standalone functions
+        nxs_df = self.load_nxs_files(self.path, force_reload=True)
+        fio_df = self.load_fio_files(self.path, force_reload=True)
+        
+        # Update the controller
+        self.controller = DataController(nxs_df, fio_df)
 
         # Rerun to refresh UI
         st.rerun()
@@ -152,10 +163,10 @@ class FileFilterApp:
     def run(self):
         st.title("NeXus-Fio-File Plotting App")
         
-        # Load cached data in the GUI
-        nxs_df = load_nxs_files(self.path)
-        fio_df = load_fio_files(self.path)
-            
+        # Load cached data using the standalone functions
+        nxs_df = self.load_nxs_files(self.path)  
+        fio_df = self.load_fio_files(self.path)
+                
 
         # Initialize the controller with the DataFrames
         self.controller = DataController(nxs_df, fio_df)
@@ -189,18 +200,21 @@ class FileFilterApp:
         col_reload, col_reset = st.columns([1, 1])
         with col_reload:
             if st.button("Force Reload"):
-            #Keep the session state intact. I just want to refresh the underlying data.            
-            # Clear the cache (this will force all cached functions to reload)
-            st.cache_data.clear()
-            # Force reload the data
-            # Reload the data (no need for force_reload=True since the cache is cleared), #TODO: I leave this comment for the moment still here, but I could remove the force_reload=Ture actually 
-            # Clearing the cache is a "sledgehammer" approach
-            self.load_nxs_files(force_reload=True)
-            self.load_fio_files(force_reload=True)
-            
-             # Clear processed data
-            self.processed_data.clear()
-            st.rerun()
+                #Keep the session state intact. I just want to refresh the underlying data.            
+                # Clear the cache (this will force all cached functions to reload)
+                st.cache_data.clear()
+                # Force reload the data
+                # Reload the data (no need for force_reload=True since the cache is cleared), #TODO: I leave this comment for the moment still here, but I could remove the force_reload=Ture actually 
+                # Clearing the cache is a "sledgehammer" approach
+                nxs_df = self.load_nxs_files(self.path, force_reload=True)
+                fio_df = self.load_fio_files(self.path, force_reload=True)
+                
+                # Update the controller
+                self.controller = DataController(nxs_df, fio_df)
+
+                # Clear processed data
+                self.processed_data.clear()
+                st.rerun()
         with col_reset:
             if st.button("Reset App"):
                 self._reset_app(st.session_state["current_path"])  # Reset using current path
