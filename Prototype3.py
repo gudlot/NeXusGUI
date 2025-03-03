@@ -130,10 +130,19 @@ class FileFilterApp:
         self.nxs_processor=NeXusBatchProcessor(self.path)
         self.fio_processor = FioBatchProcessor(self.path)
         
-    def _reset_app(self, new_path: str):
-        # Update session state and class variable
-        st.session_state["current_path"] = new_path
-        self.path = new_path
+    def _reset_app(self, new_path: str = None):
+        """
+        Reset the app to its initial state, optionally updating the directory path.
+        
+        Args:
+            new_path (str, optional): The new directory path to set. If None, the current path is retained.
+        """
+        # Update path if a new path is provided
+        if new_path:
+            if not Path(new_path).is_dir():
+                raise ValueError(f"Invalid directory: {new_path}")
+            self.path = new_path
+            st.session_state["current_path"] = new_path
 
         # Reset class attributes 
         self.file_filter = ""
