@@ -260,11 +260,9 @@ class FileFilterApp:
             # File name filter (triggers rerun automatically on change)
             st_keyup("Filter filenames by string:", key="file_filter", debounce=100) #debounce 100ms
 
-            # Get filtered files dynamically
-            filtered_files = self._get_filtered_files()
-
+            
             # Display table with selectable rows
-            self._render_selectable_table(filtered_files)
+            self._render_selectable_table()
 
             # Render the second section for selecting data to plot
             self._render_plot_options()
@@ -330,21 +328,14 @@ class FileFilterApp:
         logger.debug(f"Computed column widths: {col_widths}")
         return col_widths
 
-           
-        
-    def _render_selectable_table(self, filtered_files):
-        """Displays a scrollable, multi-column table with selectable rows using st_aggrid."""
-        if not filtered_files:
-            st.write("No files match the filter.")
-            return
     
-    
-        # Determine file types
+    def _fetch_and_combine_metadata(self, filtered_files):
+        """Fetches and combines metadata for .nxs and .fio files."""
         nxs_files = [f for f in filtered_files if f.endswith(".nxs")]
         fio_files = [f for f in filtered_files if f.endswith(".fio")]
-        logger.debug(f"NXS files : {len(nxs_files)}")
-        logger.debug(f"Fio files : {len(fio_files )}")
-        logger.debug(f"Filtered files : {filtered_files}")
+
+        logger.debug(f"NXS files: {len(nxs_files)}")
+        logger.debug(f"FIO files: {len(fio_files)}")
 
         # Fetch metadata for .nxs files
         nxs_metadata = None
@@ -355,11 +346,9 @@ class FileFilterApp:
         fio_metadata = None
         if fio_files:
             fio_metadata = self.fio_processor.get_core_metadata()
-        
+
         # Combine metadata into a single DataFrame
         if nxs_metadata is not None and fio_metadata is not None:
-            logger.debug(f"NXS Metadata Schema: {nxs_metadata.schema}")
-            logger.debug(f"FIO Metadata Schema: {fio_metadata.schema}")
             combined_metadata = pl.concat([nxs_metadata, fio_metadata])
         elif nxs_metadata is not None:
             combined_metadata = nxs_metadata
@@ -367,100 +356,88 @@ class FileFilterApp:
             combined_metadata = fio_metadata
         else:
             st.warning("No selection data available.")
-            return
-        
-        # Debugging: Print lengths of filtered_files and combined_metadata
-        #logger.debug('nxs_metadata ', nxs_metadata)
-        #logger.debug('fio_metadata ', fio_metadata)
-        #logger.debug(f"Filtered files: {len(filtered_files)}")
-        #logger.debug(f"Combined metadata rows: {len(combined_metadata)}")
+            return None
 
-        
-
-        # Debugging: Print filtered_files_for_metadata
-        logger.debug(f"filtered_files: {filtered_files}")
-        logger.debug(f"metadata_filenames: {combined_metadata['filename'].to_list()}")
-        
-
-        # Ensure combined_metadata contains only relevant filenames
+        # Filter metadata to include only relevant filenames
         combined_metadata = combined_metadata.filter(
             pl.col("filename").is_in(filtered_files)
         )
 
-        # Recompute creation timestamps for the now-filtered files
-        created_values = [
-            datetime.fromtimestamp(Path(self.path, f).stat().st_ctime).strftime('%Y-%m-%d %H:%M:%S')
-            for f in filtered_files if Path(self.path, f).exists()
-        ]
-
-        # Ensure length consistency
-        if len(created_values) != len(combined_metadata):
-            raise ValueError(f"Mismatch: combined_metadata ({len(combined_metadata)}) vs created_values ({len(created_values)})")
-
-        ## Add "Created" column safely
-        #combined_metadata = combined_metadata.with_columns([
-        #    pl.Series("Created", created_values)
-        #])
-
-
-        # Sort by filename
-        #combined_metadata = combined_metadata.sort("filename")
-        #Sort by scan_id
-        combined_metadata = combined_metadata.with_columns(
-        pl.col("scan_id").cast(pl.Int64, strict=False)  # Convert to integer if possible
-    ).sort("scan_id")
+        return combined_metadata
+    
+    def _sort_metadata(self, metadata):
+        """Sorts the metadata DataFrame by scan_id."""
+        return metadata.with_columns(
+            pl.col("scan_id").cast(pl.Int64, strict=False)
+        ).sort("scan_id")
         
-        # **Compute optimal column widths before converting to Pandas**
-        column_widths = self.compute_optimal_column_widths(combined_metadata)
-        
-
-        # Convert Polars DataFrame to Pandas (st_aggrid requires Pandas)
-        df_pd = combined_metadata.to_pandas()
-        
-        logger.debug(f"Columns before AgGrid: {df_pd.columns.tolist()}")
+    def _display_aggrid_table(self, metadata):
+        """Displays the metadata DataFrame in an AgGrid table."""
+        # Convert Polars DataFrame to Pandas
+        df_pd = metadata.to_pandas()
 
         # Configure AgGrid options
         gb = GridOptionsBuilder.from_dataframe(df_pd)
+        column_widths = self.compute_optimal_column_widths(metadata)
         for col, width in column_widths.items():
             gb.configure_column(col, width=width, wrapText=True, autoHeight=True)
-        gb.configure_selection(selection_mode="multiple", use_checkbox=True)  # Enable checkboxes
-        gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=20)  # Enable pagination
+        gb.configure_selection(selection_mode="multiple", use_checkbox=True)
+        gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=20)
         grid_options = gb.build()
         grid_options["defaultColDef"] = {
-                            "cellStyle": {"font-size": "10px"}  # Set the font size here
-                        }
-
+            "cellStyle": {"font-size": "10px"}
+        }
         # Display AgGrid table
         grid_response = AgGrid(df_pd, gridOptions=grid_options, height=400, fit_columns_on_grid_load=True)
-        
-        
-        # Debugging: Log detailed grid response
+
+        # Log grid response for debugging
         logger.debug("Grid Response Data: %s", grid_response.data)
         logger.debug("Grid Selected Rows: %s", grid_response.selected_rows)
-        
-        # Debugging: Log detailed grid response before validation
-        logger.debug(f"Grid Response Keys: {list(grid_response.keys()) if grid_response else 'None'}")
-        logger.debug(f"Grid Response Data: {grid_response}")
-        logger.debug(f"Selected Rows Content: {grid_response['selected_rows']}")
-        logger.debug(f'type {type(grid_response['selected_rows'])}')
 
-        # Extract selected filenames from the AgGrid response
+        return grid_response
+    
+    def _update_selected_files_and_metadata(self, grid_response):
+        """Updates the selected files and metadata in session state."""
         if grid_response and "selected_rows" in grid_response:
             selected_df = pd.DataFrame(grid_response["selected_rows"])
             if "filename" in selected_df.columns:
                 st.session_state["selected_files"] = selected_df["filename"].tolist()
-                self.selected_files = st.session_state["selected_files"] 
-                
-                # Store selected metadata as a Polars DataFrame
+                self.selected_files = st.session_state["selected_files"]
                 self.selected_metadata = pl.from_pandas(selected_df)
                 st.session_state["selected_metadata"] = self.selected_metadata
             else:
                 self.selected_metadata = None
-                st.session_state["selected_metadata"] = None  # Clear if nothing selected
+                st.session_state["selected_metadata"] = None
 
-        # Debugging: Verify selected files
-        logger.debug("\N{hot pepper}")
+        # Log selected files for debugging
         logger.debug(f"Selected files: {self.selected_files}")
+           
+        
+    def _render_selectable_table(self):
+        """Displays a scrollable, multi-column table with selectable rows using st_aggrid."""
+        
+        # Get filtered files dynamically
+        filtered_files = self._get_filtered_files()
+        if not filtered_files:
+            st.write("No files match the filter.")
+            return
+        
+        # Fetch and combine metadata for filtered files
+        combined_metadata = self._fetch_and_combine_metadata(filtered_files)
+        if combined_metadata is None:
+            st.warning("No selection data available.")
+            return
+
+        # Sort metadata by scan_id
+        combined_metadata = self._sort_metadata(combined_metadata)
+
+        # Display the table using AgGrid
+        grid_response = self._display_aggrid_table(combined_metadata)
+
+        # Update selected files and metadata in session state
+        self._update_selected_files_and_metadata(grid_response)
+            
+       
         
     #don't cache this function with st.cache_data because we expect directory content to change frequently    
     def _list_files_in_directory(self) -> list:
