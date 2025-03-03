@@ -461,46 +461,58 @@ class FileFilterApp:
         # Debugging: Verify selected files
         logger.debug("\N{hot pepper}")
         logger.debug(f"Selected files: {self.selected_files}")
+        
+    #don't cache this function with st.cache_data because we expect directory content to change frequently    
+    def _list_files_in_directory(self) -> list:
+        """Returns a list of files in the directory."""
+        path = Path(self.path).resolve()  # Ensure absolute path
+        return [f.name for f in path.glob("*") if f.is_file()]
+    
+    def _apply_extension_filter(self, files: list) -> list:
+        """Filters files based on the selected extension."""
+        ext_filter = st.session_state["extension_filter"]
+        valid_extensions = (".fio", ".nxs") if ext_filter == "All" else (ext_filter,)
+        return [f for f in files if Path(f).suffix in valid_extensions]
+    
+    def _apply_filename_filter(self, files: list) -> list:
+        """Filters files based on the filename filter."""
+        file_filter = st.session_state["file_filter"].strip()
+        if not file_filter:
+            return files
+        
+        # Build regex pattern based on the filter
+        if file_filter.isdigit():  # Match scan number
+            regex_pattern = rf"(?<!\d){file_filter}(?!\d)"
+        else:  # Match general filename pattern
+            regex_pattern = re.escape(file_filter).replace(r"\*", ".*").replace(r"\?", ".")
+        
+        return [f for f in files if re.search(regex_pattern, f, re.IGNORECASE)]
+
 
     def _get_filtered_files(self):
         """Returns a list of .fio or .nxs files in the directory that match the filters."""
         
-        
-        path = Path(self.path).resolve()  # Ensure absolute path
-        if not path.is_dir():
+        # Check if the directory is valid
+        if not self._is_valid_directory():
             st.error(f"Invalid directory: {self.path}")
-            return []
-        
+                  
         logger.debug(f"Current directory path: {self.path}")
 
-        # Read the extension and filename filters from session state
-        ext_filter = st.session_state.get("extension_filter", "All")
-        file_filter = st.session_state.get("file_filter", "").strip()  # Strip spaces
-
-        valid_extensions = (".fio", ".nxs") if ext_filter == "All" else (ext_filter,)
-        # List files in the directory (non-recursive)
-        #files = [f.name for f in path.iterdir() if f.is_file() and f.suffix in valid_extensions]
-        files = [f.name for f in path.glob("*") if f.is_file() and f.suffix in valid_extensions]
-
+        # Get files in the directory
+        files = self._list_files_in_directory()
         
+        # Apply extension filter
+        files = self._apply_extension_filter(files)
         
-        # Log the files found in the directory
-        logger.debug(f"Files found in directory: {files}")
-
-        # Apply filename filtering (supports numbers)
-        if file_filter:
-            if file_filter.isdigit():  # If only numbers are entered, match scan number
-                #regex_pattern = rf"\D{file_filter}\D"  # Ensures number isn't part of another number
-                regex_pattern= rf"(?<!\d){file_filter}(?!\d)"
-            else:
-                regex_pattern = re.escape(file_filter).replace(r"\*", ".*").replace(r"\?", ".")
-            
-            files = [f for f in files if re.search(regex_pattern, f, re.IGNORECASE)]
-            
-             # Log the filtered files
-            logger.debug(f"Filtered files: {files}")
-            
+        # Apply filename filter
+        files = self._apply_filename_filter(files)
+        
+        # Log the filtered files
+        logger.debug(f"Filtered files: {files}")
+        
         return files
+
+        
     
     @staticmethod
     @st.cache_data
