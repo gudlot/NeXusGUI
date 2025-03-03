@@ -88,6 +88,8 @@ class FileFilterApp:
         self.selected_files = []
         self.selected_metadata = None
         self.processed_data = {}
+        self.nxs_df = None
+        self.fio_df = None 
         
         self.nxs_processor = NeXusBatchProcessor(self.path)
         self.fio_processor = FioBatchProcessor(self.path)
@@ -198,8 +200,8 @@ class FileFilterApp:
         st.title("NeXus-Fio-File Plotting App")
         
         # Load cached data using the standalone functions
-        nxs_df = self.load_nxs_files(self.path)  
-        fio_df = self.load_fio_files(self.path)
+        self.nxs_df = self.load_nxs_files(self.path)  
+        self.fio_df = self.load_fio_files(self.path)
                 
 
         # Initialize the controller with the DataFrames
