@@ -78,8 +78,10 @@ class FileFilterApp:
         """Initialize FileFilterApp with session state and processors."""    
             
         self.path = default_path
-        logger.debug(f"Current directory path: {self.path}")
-      
+        if not self._is_valid_directory():
+            logger.warning(f"Default path is invalid: {default_path}")
+            self.path = ""  # Reset to empty if default path is invalid
+        
         
         self.file_filter = ""
         self.extension_filter = ""
@@ -108,6 +110,32 @@ class FileFilterApp:
         for key, value in session_state_defaults.items():
             if key not in st.session_state:
                 st.session_state[key] = value
+                
+    def _is_valid_directory(self, path: str = None) -> bool:
+        """
+        Check if the given path (or self.path if None) is set and points to a valid directory.
+        Args:
+            path (str, optional): The path to check. If None, uses self.path.
+        Returns:
+            bool: True if the path is valid, False otherwise.
+        """
+        path_to_check = path if path is not None else self.path
+        return path_to_check and Path(path_to_check).is_dir()
+    
+    def _update_path(self, new_path: str):
+        """
+        Update the directory path and session state if the new path is valid.
+        Args:
+            new_path (str): The new directory path.
+        Raises:
+            ValueError: If the new path is invalid.
+        """
+        if not self._is_valid_directory(new_path):
+            raise ValueError(f"Invalid directory: {new_path}")
+        
+        self.path = new_path
+        st.session_state["current_path"] = new_path
+        logger.info(f"Updating path to: {new_path}")
                 
     #Flexibility: The force_reload parameter allows you to control whether the data 
     # should be reload
@@ -139,10 +167,7 @@ class FileFilterApp:
         """
         # Update path if a new path is provided
         if new_path:
-            if not Path(new_path).is_dir():
-                raise ValueError(f"Invalid directory: {new_path}")
-            self.path = new_path
-            st.session_state["current_path"] = new_path
+            self._update_path(new_path)
 
         # Reset class attributes 
         self.file_filter = ""
@@ -195,17 +220,15 @@ class FileFilterApp:
 
         # Get user input for the directory path
         new_path = st.text_input("Enter the directory path:", value=st.session_state["current_path"])
-
+                
         # Update path only if it actually changed
         if new_path and new_path != st.session_state["current_path"]:
-            if Path(new_path).is_dir():
-                logger.info(f"Updating path to: {new_path}")
-
-                # Update session state and class variable
-                st.session_state["current_path"] = new_path
-            else:
-                st.error(f"Invalid directory: {new_path}")
-                
+            try:
+                # Reset the app with the new path
+                self._reset_app(new_path)
+            except ValueError as e:
+                st.error(f"Invalid directory: {new_path}. Error: {e}")
+                    
         col_reload, col_reset = st.columns([1, 1])
         with col_reload:
             if st.button("Force Reload"):
@@ -229,9 +252,8 @@ class FileFilterApp:
                 self._reset_app(st.session_state["current_path"])  # Reset using current path
                 
 
-        if self.path and Path(self.path).is_dir():
+        if self._is_valid_directory():
             
-
             # File type selection (no duplicate widgets)
             st.radio("Select file type:", ["All", ".fio", ".nxs"], horizontal=True, key="extension_filter")
 
