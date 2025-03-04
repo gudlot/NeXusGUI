@@ -122,11 +122,10 @@ class FileFilterApp:
         # Use the session state path instead of the default path
         self.path = st.session_state["current_path"]
             
-        
         if not self._is_valid_directory():
             logger.warning(f"Default path is invalid: {default_path}")
-            self.path = ""  # Reset to empty if default path is invalid
-        
+            self.path = self._prompt_for_valid_path()  # Prompt user for a valid path
+            
         
         self.file_filter = ""
         self.extension_filter = ""
@@ -160,6 +159,17 @@ class FileFilterApp:
         # Initialize current_path only if it doesn't already exist
         if "current_path" not in st.session_state:
             st.session_state["current_path"] = self.path
+            
+    def _prompt_for_valid_path(self) -> str:
+        """Prompt the user to enter a valid directory path."""
+        st.warning("The provided path is invalid. Please enter a valid directory path.")
+        new_path = st.text_input("Enter a valid directory path:", value="")
+        
+        if new_path and self._is_valid_directory(new_path):
+            return new_path
+        else:
+            st.error("Invalid path. Please try again.")
+            return ""  # Return empty string if no valid path is provided
                     
     def _is_valid_directory(self, path: str = None) -> bool:
         """
@@ -299,12 +309,7 @@ class FileFilterApp:
             on_change=self._on_path_change
         )
         
-        # Debugging: Log the current and new path
-        logger.debug(75 * "\N{aubergine}")
-        logger.debug(f"Current path: {st.session_state.get('current_path')}")
-        logger.debug(f"New path: {new_path}")
-        logger.debug(75 * "\N{rainbow}")
-        
+                
         # Update path only if it actually changed
         if new_path and new_path != st.session_state.get("current_path", self.path):
             try:
@@ -312,8 +317,7 @@ class FileFilterApp:
                 self._reset_app(new_path)
             except ValueError as e:
                 st.error(f"Invalid directory: {new_path}. Error: {e}")
-
-                
+               
         st.text_input("\N{hot pepper} Current Path:", st.session_state.get("current_path", ""), disabled=True)
 
                     
@@ -583,9 +587,7 @@ class FileFilterApp:
         # Check if the directory is valid
         if not self._is_valid_directory():
             st.error(f"Invalid directory: {self.path}")
-                  
-        logger.debug(f"Current directory path: {self.path}")
-
+         
         # Get files in the directory
         files = self._list_files_in_directory()
         
