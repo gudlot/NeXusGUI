@@ -190,12 +190,16 @@ class FileFilterApp:
         Raises:
             ValueError: If the new path is invalid.
         """
-        if not self._is_valid_directory(new_path):
-            raise ValueError(f"Invalid directory: {new_path}")
-        
-        self.path = new_path
-        st.session_state["current_path"] = new_path
-        logger.info(f"Updating path to: {new_path}")
+        try:
+            if not self._is_valid_directory(new_path):
+                raise ValueError(f"Invalid directory: {new_path}")
+            
+            self.path = new_path
+            st.session_state["current_path"] = new_path
+            logger.info(f"Updating path to: {new_path}")
+        except ValueError as e:
+            logger.error(f"Failed to update path: {e}")
+            st.error(f"Invalid directory: {new_path}. Please enter a valid path.")
                 
     #Flexibility: The force_reload parameter allows you to control whether the data 
     # should be reload
