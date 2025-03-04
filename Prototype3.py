@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 import polars as pl
 import pandas as pd
-from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 import logging
 import re
 import h5py 
@@ -79,8 +79,6 @@ from datetime import datetime, timedelta
 
 def generate_fake_fio_metadata(fio_files):
     """Generates fake metadata for .fio files."""
-    
-    # Ensure fio_files is a list
     if not isinstance(fio_files, list):
         raise ValueError("fio_files must be a list")
 
@@ -246,8 +244,8 @@ class FileFilterApp:
         # Reset class attributes 
         self.file_filter = ""
         self.extension_filter = ""
-        self.selected_files = []
-        self.selected_metadata = None
+        self.selected_files = st.session_state.get("selected_files", [])  # Reinitialize from session state
+        self.selected_metadata = st.session_state.get("selected_metadata", None)  # Reinitialize from session state
         self.processed_data = {}
         # Reset session state to defaults
         self._initialize_session_state()
@@ -267,10 +265,12 @@ class FileFilterApp:
         # Update the controller
         self.controller = DataController(self.nxs_df, self.fio_df)
 
+        
         logger.debug(75 * "\N{T-Rex}")
         logger.debug(f"Path after reset: {self.path}")  # Confirm the path is updated
+        logger.debug(f"Selected files after reset: {self.selected_files}")  # Log selected files
         logger.debug(75 * "\N{T-Rex}")
-        
+            
         # Rerun to refresh UI
         st.rerun()
 
@@ -279,9 +279,7 @@ class FileFilterApp:
         st.title("NeXus-Fio-File Plotting App")
         
         # Load cached data using the standalone functions
-        #self.nxs_df = self.load_nxs_files(self.path)  
-        #self.fio_df = self.load_fio_files(self.path)
-         # Load cached data using the standalone functions
+        # Load cached data using the standalone functions
         self.nxs_df = self.load_nxs_files(st.session_state["current_path"])  
         self.fio_df = self.load_fio_files(st.session_state["current_path"])        
 
@@ -355,7 +353,7 @@ class FileFilterApp:
             new_extension_filter = st.radio("Select file type:", ["All", ".fio", ".nxs"], horizontal=True, key="extension_filter")
             if new_extension_filter != st.session_state["extension_filter"]:
                 st.session_state["extension_filter"] = new_extension_filter
-                st.rerun()
+                #st.rerun()
 
             # File name filter (triggers rerun automatically on change)
             st_keyup("Filter filenames by string:", key="file_filter", debounce=100) #debounce 100ms
@@ -456,6 +454,7 @@ class FileFilterApp:
         #    ).select(["filename", "scan_id", "scan_command", "human_start_time"])
         if fio_files:
             fio_metadata = generate_fake_fio_metadata(fio_files)
+            logging.debug(f'Fio_metadata:\n {fio_metadata}')
 
         # Fetch metadata for .nxs files
         #nxs_metadata = None
@@ -465,6 +464,19 @@ class FileFilterApp:
         #fio_metadata = None
         #if fio_files:
         #    fio_metadata = self.fio_processor.get_core_metadata()
+        
+        
+        if nxs_metadata is not None:
+            logger.debug(f"NXS Metadata Filenames: {nxs_metadata['filename'].to_list()}")
+        if fio_metadata is not None:
+            logger.debug(f"FIO Metadata Filenames: {fio_metadata['filename'].to_list()}")
+                
+        if nxs_metadata is not None:
+            logger.debug(f"NXS Metadata Schema: {nxs_metadata.schema}")
+        if fio_metadata is not None:
+            logger.debug(f"FIO Metadata Schema: {fio_metadata.schema}")
+
+
 
         # Combine metadata into a single DataFrame
         if nxs_metadata is not None and fio_metadata is not None:
@@ -481,7 +493,11 @@ class FileFilterApp:
         combined_metadata = combined_metadata.filter(
             pl.col("filename").is_in(filtered_files)
         )
-
+        
+        logging.debug(f"Combined metadata with selection {st.session_state.extension_filter} :")
+        logging.debug(f"Type of combined_metadata: {type(combined_metadata)}")
+        logging.debug(f"\N{rainbow}\N{rainbow}\N{rainbow} {combined_metadata}")
+        logging.debug(30*"\N{rainbow}")
         return combined_metadata
     
     def _sort_metadata(self, metadata):
@@ -500,6 +516,8 @@ class FileFilterApp:
         column_widths = self.compute_optimal_column_widths(metadata)
         for col, width in column_widths.items():
             gb.configure_column(col, width=width, wrapText=True, autoHeight=True)
+       
+        gb.configure_column("filename", width=200, wrapText=True, autoHeight=True, checkboxSelection=True)
         gb.configure_selection(selection_mode="multiple", use_checkbox=True)
         gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=20)
         grid_options = gb.build()
@@ -507,29 +525,54 @@ class FileFilterApp:
             "cellStyle": {"font-size": "10px"}
         }
         # Display AgGrid table
-        grid_response = AgGrid(df_pd, gridOptions=grid_options, height=400, fit_columns_on_grid_load=True)
+        grid_response = AgGrid(df_pd, gridOptions=grid_options, 
+                               height=400, fit_columns_on_grid_load=True)
 
         # Log grid response for debugging
         logger.debug("Grid Response Data: %s", grid_response.data)
         logger.debug("Grid Selected Rows: %s", grid_response.selected_rows)
+        
+        
+  
 
         return grid_response
     
     def _update_selected_files_and_metadata(self, grid_response):
         """Updates the selected files and metadata in session state."""
-        if grid_response and "selected_rows" in grid_response:
-            selected_df = pd.DataFrame(grid_response["selected_rows"])
-            if "filename" in selected_df.columns:
-                st.session_state["selected_files"] = selected_df["filename"].tolist()
-                self.selected_files = st.session_state["selected_files"]
-                self.selected_metadata = pl.from_pandas(selected_df)
-                st.session_state["selected_metadata"] = self.selected_metadata
+        if grid_response and 'selected_rows' in grid_response:
+            # Handle case where selected_rows is None or an empty DataFrame
+            selected_rows = grid_response['selected_rows']
+            if selected_rows is None or (hasattr(selected_rows, 'empty') and selected_rows.empty):
+                selected_rows = []  # Use empty list if None or empty DataFrame
             else:
-                self.selected_metadata = None
-                st.session_state["selected_metadata"] = None
+                selected_rows = selected_rows  # Use the DataFrame as-is
 
-        # Log selected files for debugging
-        logger.debug(f"Selected files: {self.selected_files}")
+            # Extract 'filename' values from the selected rows
+            if isinstance(selected_rows, list):
+                selected_files = [row['filename'] for row in selected_rows]
+            else:
+                # If selected_rows is a DataFrame, extract the 'filename' column
+                selected_files = selected_rows['filename'].tolist()
+
+            # Update session state
+            st.session_state['selected_files'] = selected_files
+            self.selected_files = selected_files
+
+            # Convert selected rows to a Polars DataFrame
+            if isinstance(selected_rows, list):
+                selected_df = pl.DataFrame(selected_rows)
+            else:
+                selected_df = pl.DataFrame(selected_rows.to_dict('records'))
+
+            self.selected_metadata = selected_df
+            st.session_state['selected_metadata'] = self.selected_metadata
+
+
+
+            # Log selected files for debugging
+            logger.debug(f"\N{hot pepper} Selected files: {self.selected_files}")
+            
+
            
         
     def _render_selectable_table(self):
@@ -567,8 +610,24 @@ class FileFilterApp:
     def _apply_extension_filter(self, files: list) -> list:
         """Filters files based on the selected extension."""
         ext_filter = st.session_state["extension_filter"]
-        valid_extensions = (".fio", ".nxs") if ext_filter == "All" else (ext_filter,)
-        return [f for f in files if Path(f).suffix in valid_extensions]
+        
+        # Define valid extensions based on the selected filter
+        if ext_filter == "All":
+            valid_extensions = (".fio", ".nxs")
+        else:
+            valid_extensions = (ext_filter.lower(),)  # Ensure lowercase for comparison
+        
+        # Log the filter and valid extensions for debugging
+        logger.debug(f"Applying extension filter: {ext_filter}")
+        logger.debug(f"Valid extensions: {valid_extensions}")
+        
+        # Filter files based on extension (case-insensitive)
+        filtered_files = [f for f in files if Path(f).suffix.lower() in valid_extensions]
+        
+        # Log the filtered files for debugging
+        logger.debug(f"Filtered files: {filtered_files}")
+        
+        return filtered_files
     
     def _apply_filename_filter(self, files: list) -> list:
         """Filters files based on the filename filter."""
@@ -603,27 +662,7 @@ class FileFilterApp:
         return files
 
         
-    @st.cache_data
-    def _get_column_names(selected_files: list[str], path: str) -> dict[str, None]:
-        column_names = {}
-
-        if selected_files:
-            nxs_files = [f for f in selected_files if f.endswith(".nxs")]
-            fio_files = [f for f in selected_files if f.endswith(".fio")]
-
-            if nxs_files:
-                nexus_processor = NeXusBatchProcessor(path)
-                df_nxs = nexus_processor.get_lazy_dataframe(nxs_files)
-                column_names |= {col: None for col in df_nxs.schema.keys()}  # No .collect() here
-
-            if fio_files:
-                fio_processor = FioBatchProcessor(path)
-                df_fio = fio_processor.get_dataframe(fio_files)
-                column_names |= {col: None for col in df_fio.columns}  # Corrected
-
-        return column_names
-
-
+    
 
     def _render_plot_options(self):
         st.header("Plot Options")
@@ -633,7 +672,7 @@ class FileFilterApp:
             time_options = [f"{time_column} (Unix)", f"{time_column} (Datetime)"]
 
             # Ensure we don’t modify cached data in place
-            column_names = self._get_column_names(self.selected_files, self.path).copy()
+            column_names = self.controller.get_column_names(self.selected_files).copy()
             column_names.pop(time_column, None)  # Remove time_column safely
 
             if not column_names:
@@ -643,85 +682,78 @@ class FileFilterApp:
             col1, col2 = st.columns([3, 1])
 
             with col1:
-                x1 = st.selectbox("Select X1 (Time):", time_options, key="plot_options_x1")
-                x2 = st.selectbox("Select X2:", list(column_names.keys()), key="plot_options_x2")
-                y1 = st.selectbox("Select Y1-axis:", list(column_names.keys()), key="plot_options_y1")
-                z = st.selectbox("Select Normalization Column:", list(column_names.keys()), key="plot_options_z")
+                t = st.selectbox("Select time:", time_options, key="plot_option_t")
+                x = st.selectbox("Select x:", list(column_names.keys()), key="plot_option_x")
+                y = st.selectbox("Select y:", list(column_names.keys()), key="plot_options_y")
+                z = st.selectbox("Select Normalization:", list(column_names.keys()), key="plot_options_z")
 
             with col2:
-                x1_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x1_radio")
-                x2_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x2_radio")
-                y1_radio = st.radio("", ["Use", "Ignore"], key="plot_options_y1_radio")
+                t_radio = st.radio("", ["Use", "Ignore"], key="plot_options_t_radio")
+                x_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x_radio")
+                y_radio = st.radio("", ["Use", "Ignore"], key="plot_options_y_radio")
                 z_radio = st.radio("", ["Use", "Ignore"], key="plot_options_z_radio", index=1)  # Default to Ignore
 
             normalize = st.checkbox("Normalize data", value=False, key="plot_options_normalize")
 
             if st.button("Plot", key="plot_options_plot"):
-                x_axis = x1 if x1_radio == "Use" else (x2 if x2_radio == "Use" else None)
-                y_axis = y1 if y1_radio == "Use" else None
+                x_axis = x if x_radio == "Use" else (t if t_radio == "Use" else t)  # Default to t
+                y_axis = y if y_radio == "Use" else None
                 z_axis = z if z_radio == "Use" else None
 
                 if not x_axis or not y_axis:
-                    st.error("You must select either X1 or X2 and Y1 for plotting.")
+                    st.error("You must select both an x-axis (either x or t) and a y-axis for plotting.")
                     return
+                
+                logger.debug(f"Selected x-axis: {x_axis}")
+                logger.debug(f"Selected y-axis: {y_axis}")
+                logger.debug(f"Selected z-axis: {z_axis}")
 
-                self.plot_data(x_axis, y_axis, z_axis, normalize)
+                self.plot_data(self.selected_files, x_axis, y_axis, z_axis, normalize)
 
-
-    def plot_data(selected_files, combined_metadata, x_column, y_columns, z_column=None):
+         
+    def plot_data(self, x_axis: str, y_axis: str, z_axis: str = None, normalize: bool = False):
+            
         """
-        Plots data based on selected files and column types.
-        
-        Parameters:
-        - selected_files: List of selected file indices.
-        - combined_metadata: DataFrame containing metadata.
-        - x_column: Column name for x-axis.
-        - y_columns: List of column names for y-axis.
-        - z_column: Optional column for normalization.
+        Plots data based on the selected columns and files.
+
+        Args:
+            x_axis (str): The column name for the x-axis.
+            y_axis (str): The column name for the y-axis.
+            z_axis (str): The column name for normalization (optional).
+            normalize (bool): Whether to normalize the data.
         """
+        if not self.selected_files:
+            st.warning("No files selected for plotting.")
+            return            
+
+        logger.debug(f"Selected columns for plotting: x-{x_axis}, y-{y_axis}, z-{z_axis}, normalise-{normalize} ")
+           
         
-        # Ensure selected files are sorted by scan_id if possible
-        try:
-            combined_metadata = combined_metadata.sort_values("scan_id", key=lambda x: x.astype(int))
-        except ValueError:
-            logging.warning("scan_id could not be converted to integers. Sorting lexicographically.")
-            combined_metadata = combined_metadata.sort_values("scan_id")
+
+    def _generate_plot(self, data: pd.DataFrame, x_axis: str, y_axis: str):
+        """
+        Generates a plot using Matplotlib.
+
+        Args:
+            data (pd.DataFrame): The data to plot.
+            x_axis (str): The column name for the x-axis.
+            y_axis (str): The column name for the y-axis.
+        """
+        import matplotlib.pyplot as plt
         
         # Assign markers and colors
         markers = {i: marker for i, marker in zip(selected_files, itertools.cycle(['o', 's', 'D', '^', 'v', '<', '>']))}
         colors = {i: color for i, color in zip(selected_files, itertools.cycle(plt.cm.tab10.colors))}
-        
+               
+
         plt.figure(figsize=(10, 6))
-        
-        for idx in selected_files:
-            row = combined_metadata.iloc[idx]
-            x_data = row[x_column]
-            
-            if isinstance(x_data, str) or np.isscalar(x_data):
-                x_data = np.array([x_data])  # Broadcast scalars/strings
-            
-            for y_column in y_columns:
-                y_data = row[y_column]
-                
-                if isinstance(y_data, str) or np.isscalar(y_data):
-                    y_data = np.full_like(x_data, y_data, dtype=object)  # Broadcast scalars
-                
-                if isinstance(y_data, np.ndarray):
-                    if y_data.ndim == 1:
-                        plt.plot(x_data, y_data, marker=markers[idx], color=colors[idx], label=f"{row['filename']} - {y_column}")
-                    elif y_data.ndim == 2:
-                        logging.debug(f"2D data detected in {y_column}. Using imshow.")
-                        plt.figure()
-                        plt.imshow(y_data, aspect='auto', cmap='viridis')
-                        plt.colorbar(label=y_column)
-                        plt.title(f"{row['filename']} - {y_column}")
-                        plt.show()
-                
-        plt.xlabel(x_column)
-        plt.ylabel(", ".join(y_columns))
-        plt.legend()
-        plt.title("Data Plot")
-        plt.show()
+        plt.plot(data[x_axis], data[y_axis], marker="o", linestyle="-", color="b")
+        plt.xlabel(x_axis)
+        plt.ylabel(y_axis)
+        plt.title(f"{y_axis} vs {x_axis}")
+        plt.grid(True)
+        st.pyplot(plt)
+
 
 
     def _render_right_column(self):
