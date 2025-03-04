@@ -220,18 +220,13 @@ class FileFilterApp:
             new_path (str, optional): The new directory path to set. If None, the current path is retained.
         """
         
-        if new_path and not self._is_valid_directory(new_path):
-            st.error(f"Invalid directory: {new_path}")
+        try:
+            # Update path if a new path is provided
+            if new_path:
+                self._update_path(new_path)  # Use _update_path to handle validation and updates
+        except ValueError as e:
+            st.error(str(e))  # Display the error message if the path is invalid
             return
-
-            
-        # Update path if a new path is provided
-        if new_path:
-            logger.debug(75 * "\N{pineapple}")
-            logger.debug(f"Updating path: {new_path}")
-            logger.debug(75 * "\N{pineapple}")
-            self.path = new_path  # Ensure self.path updates first
-            st.session_state["current_path"] = new_path  # Keep session state in sync
 
 
         # Reset class attributes 
@@ -270,9 +265,11 @@ class FileFilterApp:
         st.title("NeXus-Fio-File Plotting App")
         
         # Load cached data using the standalone functions
-        self.nxs_df = self.load_nxs_files(self.path)  
-        self.fio_df = self.load_fio_files(self.path)
-                
+        #self.nxs_df = self.load_nxs_files(self.path)  
+        #self.fio_df = self.load_fio_files(self.path)
+         # Load cached data using the standalone functions
+        self.nxs_df = self.load_nxs_files(st.session_state["current_path"])  
+        self.fio_df = self.load_fio_files(st.session_state["current_path"])        
 
         # Initialize the controller with the DataFrames
         self.controller = DataController(self.nxs_df, self.fio_df)
