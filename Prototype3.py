@@ -587,11 +587,7 @@ class FileFilterApp:
 
     def _get_filtered_files(self):
         """Returns a list of .fio or .nxs files in the directory that match the filters."""
-        
-        # Check if the directory is valid
-        if not self._is_valid_directory():
-            st.error(f"Invalid directory: {self.path}")
-         
+
         # Get files in the directory
         files = self._list_files_in_directory()
         
