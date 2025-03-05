@@ -533,9 +533,29 @@ class FileFilterApp:
         )
                 
         logging.debug(f"Selection extension: {st.session_state.extension_filter}")
-        #logging.debug(f"Type of combined_metadata: {type(combined_metadata)}")
-        #logging.debug(f"\N{rainbow}\N{rainbow}\N{rainbow} {combined_metadata}")
-        logging.debug(30*"\N{rainbow}")
+        
+        logging.debug(30 * "\N{rainbow}")
+        # Combine metadata into a single DataFrame
+        if nxs_metadata is not None and fio_metadata is not None:
+            logger.debug("Both NXS and FIO metadata are available.")
+            combined_metadata = pl.concat([nxs_metadata, fio_metadata])
+            logger.debug(f"Combined Metadata (NXS + FIO):\n{combined_metadata}")
+        elif nxs_metadata is not None:
+            logger.debug("Only NXS metadata is available.")
+            logger.debug(f"NXS Metadata:\n{nxs_metadata}")
+            combined_metadata = nxs_metadata
+            logger.debug(f"Combined Metadata (NXS only):\n{combined_metadata}")
+        elif fio_metadata is not None:
+            logger.debug("Only FIO metadata is available.")
+            logger.debug(f"FIO Metadata:\n{fio_metadata}")
+            combined_metadata = fio_metadata
+            logger.debug(f"Combined Metadata (FIO only):\n{combined_metadata}")
+        else:
+            logger.warning("No selection data available.")
+            st.warning("No selection data available.")
+            return None
+        logging.debug(30 * "\N{rainbow}")
+                
         return combined_metadata
     
     def _sort_metadata(self, metadata):
@@ -571,10 +591,7 @@ class FileFilterApp:
         }
         # Display AgGrid table
         
-        # If there are selected rows in session state, set them as the default selection
-        #selected_rows = st.session_state.get('selected_rows', pd.DataFrame())  # Ensure it's a DataFrame
-        
-            
+                   
         try:
             grid_response = AgGrid(
                 df_pd, 
