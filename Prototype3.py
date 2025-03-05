@@ -16,6 +16,8 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="st_aggrid")
 
 
+
+
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -77,6 +79,11 @@ import polars as pl
 import random
 from datetime import datetime, timedelta
 
+import re
+import polars as pl
+import random
+from datetime import datetime, timedelta
+
 def generate_fake_fio_metadata(fio_files):
     """Generates fake metadata for .fio files."""
     if not isinstance(fio_files, list):
@@ -84,9 +91,20 @@ def generate_fake_fio_metadata(fio_files):
 
     num_files = len(fio_files)
 
+    # Extract scan_id from filenames (last number before .fio)
+    scan_ids = []
+    for filename in fio_files:
+        # Use regex to find the last number before .fio
+        match = re.search(r"(\d+)\.fio$", filename)
+        if match:
+            scan_ids.append(match.group(1))  # Extract the numeric part
+        else:
+            # If no number is found, generate a random scan_id
+            scan_ids.append(str(random.randint(1000, 9999)))
+
     data = {
         "filename": fio_files,  # Length: num_files
-        "scan_id": [str(random.randint(1000, 9999)) for _ in range(num_files)],  # Match length
+        "scan_id": scan_ids,  # Use extracted scan_ids
         "scan_command": [f"Command_{i+1}" for i in range(num_files)],  # Match length  
         "human_start_time": [
             (datetime.now() - timedelta(days=random.randint(1, 30)))  
@@ -128,7 +146,7 @@ class FileFilterApp:
         self.file_filter = ""
         self.extension_filter = ""
         self.selected_files = []
-        self.selected_metadata = None
+        self.selected_metadata = pd.DataFrame()
         self.processed_data = {}
         self.nxs_df = None
         self.fio_df = None 
@@ -145,10 +163,10 @@ class FileFilterApp:
         """Initialize session state variables if they don't already exist."""
         session_state_defaults = {
             "selected_files": [],
-            "selected_metadata": None,
+            "selected_metadata": pd.DataFrame(),
             "extension_filter": "All",
             "file_filter": "",
-            "selected_rows": None  # Initialize selected_rows in session state
+            "selected_rows":  pd.DataFrame()  # Initialize selected_rows in session state
         }
         
         for key, value in session_state_defaults.items():
@@ -306,6 +324,8 @@ class FileFilterApp:
         """Callback function to handle changes in the extension filter."""
         # Update the session state with the new filter value
         st.session_state["extension_filter"] = st.session_state["extension_filter_widget"]
+        st.session_state["selected_rows"] = pd.DataFrame() 
+        #st.rerun()
 
     def _render_left_column(self):
         st.header("File Selection")
@@ -512,7 +532,7 @@ class FileFilterApp:
             pl.col("filename").is_in(filtered_files)
         )
                 
-        logging.debug(f"Combined metadata with selection {st.session_state.extension_filter} :")
+        logging.debug(f"Selection extension: {st.session_state.extension_filter}")
         #logging.debug(f"Type of combined_metadata: {type(combined_metadata)}")
         #logging.debug(f"\N{rainbow}\N{rainbow}\N{rainbow} {combined_metadata}")
         logging.debug(30*"\N{rainbow}")
@@ -533,7 +553,8 @@ class FileFilterApp:
         gb = GridOptionsBuilder.from_dataframe(df_pd)
         column_widths = self.compute_optimal_column_widths(metadata)
         for col, width in column_widths.items():
-            gb.configure_column(col, width=width, wrapText=True, autoHeight=True, checkboxSelection=(col == "filename"))
+            gb.configure_column(col, width=width, wrapText=True, autoHeight=True, checkboxSelection=(col == "filename"),
+                                editable=False,sortable=True, fitlerable=True)
 
         gb.configure_selection(
             selection_mode="multiple",        # Enable multiple row selection
@@ -551,17 +572,20 @@ class FileFilterApp:
         # Display AgGrid table
         
         # If there are selected rows in session state, set them as the default selection
-        selected_rows = st.session_state.get('selected_rows', [])
+        #selected_rows = st.session_state.get('selected_rows', pd.DataFrame())  # Ensure it's a DataFrame
         
+            
         try:
             grid_response = AgGrid(
                 df_pd, 
                 gridOptions=grid_options, 
-                update_mode=GridUpdateMode.SELECTION_CHANGED, #Update, when selection changes 
+                update_mode=GridUpdateMode.SELECTION_CHANGED,  # Update when selection changes 
                 height=400, 
                 fit_columns_on_grid_load=True,
                 key=grid_key,
-                selected_rows=selected_rows
+                reload_data=False,
+                data_return_mode="FILTERED_AND_SORTED",  # Ensure selected rows are returned
+         
             )
         except Exception as e:
             st.error(f"An error occurred: {e}")
@@ -574,7 +598,7 @@ class FileFilterApp:
         #st.write("Grid options:", grid_options)
 
         # Log grid response for debugging
-        #logger.debug("Grid Response Data: %s", grid_response.data)
+        logger.debug("Grid State: %s", grid_response.grid_state)
         logger.debug("Grid Selected Rows: %s", grid_response.selected_rows)
         logger.debug("Type grid selected rows: %s", type(grid_response.selected_rows))
             
@@ -642,22 +666,25 @@ class FileFilterApp:
 
         # Add debug logging to check selected_rows state
         logger.debug(f"\N{peacock}Selected rows before AgGrid render: {st.session_state.selected_rows}")
+        logger.debug('Grid key: %s', grid_key)
 
-        # Initialize selected rows as None if not set in session state
-        if st.session_state.selected_rows is None:
-            st.session_state.selected_rows = pd.DataFrame()  # Initialize as an empty DataFrame
-
-
-        # Display the table using AgGrid
-        grid_response = self._display_aggrid_table(combined_metadata, grid_key)
-        
-        # Check if selected_rows is not empty and update session state
-        if grid_response.selected_rows is not None and not grid_response.selected_rows.empty:
-            st.session_state.selected_rows = grid_response.selected_rows
-            logger.debug(f"\N{peacock}Updated session state selected rows: {st.session_state.selected_rows}")
-        else:
-            logger.debug("No selected rows to update.")
+        try:
+            # Display the table using AgGrid, pass selected_rows as initial selection if present
+            grid_response = self._display_aggrid_table(combined_metadata, grid_key)
+        except Exception as e:
+            logger.error(f"An error occurred while rendering the table: {e}")
+            grid_response = None
             
+        # Check if grid_response is valid and not None
+        if grid_response is not None and 'selected_rows' in grid_response:
+            # If grid response has selected rows, update session state
+            if grid_response.selected_rows is not None:
+                st.session_state.selected_rows = grid_response.selected_rows
+                logger.debug(f"🦚Updated session state selected rows: {st.session_state.selected_rows}")
+        else:
+            logger.debug("Grid response is invalid or doesn't contain selected rows.")
+        
+                
         # Update selected files and metadata in session state
         self._update_selected_files_and_metadata(grid_response)
             
@@ -774,7 +801,6 @@ class FileFilterApp:
 
          
     def plot_data(self, x_axis: str, y_axis: str, z_axis: str = None, normalize: bool = False):
-            
         """
         Plots data based on the selected columns and files.
 
@@ -786,11 +812,36 @@ class FileFilterApp:
         """
         if not self.selected_files:
             st.warning("No files selected for plotting.")
-            return            
+            return
 
-        logger.debug(f"Selected columns for plotting: x-{x_axis}, y-{y_axis}, z-{z_axis}, normalise-{normalize} ")
-           
-        
+        try:
+            # Retrieve data for the selected files and columns
+            plot_data = self.controller.process_selected_files(self.selected_files, x_axis, y_axis, z_axis if normalize else None)
+
+            # Format and broadcast data
+            plot_data = self.controller._format_and_broadcast_data(plot_data, x_axis, y_axis)
+
+            # Normalize data if required
+            if normalize and z_axis:
+                if z_axis in plot_data.columns:
+                    # Perform normalization (divide y-axis by z-axis)
+                    plot_data = plot_data.with_columns(
+                        (pl.col(y_axis) / pl.col(z_axis)).alias(y_axis)
+                    )
+                else:
+                    st.warning(f"Normalization column '{z_axis}' not found in the data.")
+                    normalize = False  # Disable normalization
+
+            # Convert Polars DataFrame to Pandas for plotting
+            plot_data_pd = plot_data.to_pandas()
+
+            # Generate the plot
+            self._generate_plot(plot_data_pd, x_axis, y_axis, normalize)
+
+        except Exception as e:
+            st.error(f"An error occurred while plotting: {e}")
+            logger.error(f"Plotting error: {e}", exc_info=True)
+            
 
     def _generate_plot(self, data: pd.DataFrame, x_axis: str, y_axis: str):
         """
