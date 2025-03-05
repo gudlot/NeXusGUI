@@ -814,7 +814,7 @@ class FileFilterApp:
                 logger.debug(f"Selected y-axis: {y_axis}")
                 logger.debug(f"Selected z-axis: {z_axis}")
 
-                self.plot_data(self.selected_files, x_axis, y_axis, z_axis, normalize)
+                self.plot_data(x_axis, y_axis, z_axis, normalize)
 
          
     def plot_data(self, x_axis: str, y_axis: str, z_axis: str = None, normalize: bool = False):
