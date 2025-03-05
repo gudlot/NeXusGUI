@@ -148,7 +148,7 @@ class FileFilterApp:
             "selected_metadata": None,
             "extension_filter": "All",
             "file_filter": "",
-            "selected_rows": []  # Initialize selected_rows in session state
+            "selected_rows": None  # Initialize selected_rows in session state
         }
         
         for key, value in session_state_defaults.items():
@@ -436,7 +436,7 @@ class FileFilterApp:
 
             col_widths[col] = optimal_width
 
-        logger.debug(f"Computed column widths: {col_widths}")
+        #logger.debug(f"Computed column widths: {col_widths}")
         return col_widths
 
     
@@ -472,7 +472,7 @@ class FileFilterApp:
         #    ).select(["filename", "scan_id", "scan_command", "human_start_time"])
         if fio_files:
             fio_metadata = generate_fake_fio_metadata(fio_files)
-            logging.debug(f'Fio_metadata:\n {fio_metadata}')
+            #logging.debug(f'Fio_metadata:\n {fio_metadata}')
 
         # Fetch metadata for .nxs files
         #nxs_metadata = None
@@ -484,15 +484,15 @@ class FileFilterApp:
         #    fio_metadata = self.fio_processor.get_core_metadata()
         
         
-        if nxs_metadata is not None:
-            logger.debug(f"NXS Metadata Filenames: {nxs_metadata['filename'].to_list()}")
-        if fio_metadata is not None:
-            logger.debug(f"FIO Metadata Filenames: {fio_metadata['filename'].to_list()}")
+        #if nxs_metadata is not None:
+        #    logger.debug(f"NXS Metadata Filenames: {nxs_metadata['filename'].to_list()}")
+        #if fio_metadata is not None:
+        #    logger.debug(f"FIO Metadata Filenames: {fio_metadata['filename'].to_list()}")
                 
-        if nxs_metadata is not None:
-            logger.debug(f"NXS Metadata Schema: {nxs_metadata.schema}")
-        if fio_metadata is not None:
-            logger.debug(f"FIO Metadata Schema: {fio_metadata.schema}")
+        #if nxs_metadata is not None:
+        #    logger.debug(f"NXS Metadata Schema: {nxs_metadata.schema}")
+        #if fio_metadata is not None:
+        #    logger.debug(f"FIO Metadata Schema: {fio_metadata.schema}")
 
 
 
@@ -513,8 +513,8 @@ class FileFilterApp:
         )
                 
         logging.debug(f"Combined metadata with selection {st.session_state.extension_filter} :")
-        logging.debug(f"Type of combined_metadata: {type(combined_metadata)}")
-        logging.debug(f"\N{rainbow}\N{rainbow}\N{rainbow} {combined_metadata}")
+        #logging.debug(f"Type of combined_metadata: {type(combined_metadata)}")
+        #logging.debug(f"\N{rainbow}\N{rainbow}\N{rainbow} {combined_metadata}")
         logging.debug(30*"\N{rainbow}")
         return combined_metadata
     
@@ -550,6 +550,9 @@ class FileFilterApp:
         }
         # Display AgGrid table
         
+        # If there are selected rows in session state, set them as the default selection
+        selected_rows = st.session_state.get('selected_rows', [])
+        
         try:
             grid_response = AgGrid(
                 df_pd, 
@@ -557,19 +560,21 @@ class FileFilterApp:
                 update_mode=GridUpdateMode.SELECTION_CHANGED, #Update, when selection changes 
                 height=400, 
                 fit_columns_on_grid_load=True,
-                key=grid_key
+                key=grid_key,
+                selected_rows=selected_rows
             )
         except Exception as e:
             st.error(f"An error occurred: {e}")
             logging.exception("AgGrid failed")  # Logs full traceback
 
-        selected_rows = grid_response["selected_rows"]
-        st.write("Selected Rows:", selected_rows)
+        # Update selected rows in session state based on AgGrid response
+        st.session_state.selected_rows = grid_response["selected_rows"]
+        st.write("Selected Rows:", st.session_state.selected_rows)  # Display selected rows
         st.write('Event triggered ', grid_response.event_data)
         #st.write("Grid options:", grid_options)
 
         # Log grid response for debugging
-        logger.debug("Grid Response Data: %s", grid_response.data)
+        #logger.debug("Grid Response Data: %s", grid_response.data)
         logger.debug("Grid Selected Rows: %s", grid_response.selected_rows)
         logger.debug("Type grid selected rows: %s", type(grid_response.selected_rows))
             
@@ -635,10 +640,24 @@ class FileFilterApp:
         dataset_key = st.session_state.get("extension_filter", "all")  # Default to 'all' if not set
         grid_key = f"aggrid_{dataset_key}"  # Ensures AgGrid resets when dataset changes
 
+        # Add debug logging to check selected_rows state
+        logger.debug(f"\N{peacock}Selected rows before AgGrid render: {st.session_state.selected_rows}")
+
+        # Initialize selected rows as None if not set in session state
+        if st.session_state.selected_rows is None:
+            st.session_state.selected_rows = pd.DataFrame()  # Initialize as an empty DataFrame
+
 
         # Display the table using AgGrid
         grid_response = self._display_aggrid_table(combined_metadata, grid_key)
-
+        
+        # Check if selected_rows is not empty and update session state
+        if grid_response.selected_rows is not None and not grid_response.selected_rows.empty:
+            st.session_state.selected_rows = grid_response.selected_rows
+            logger.debug(f"\N{peacock}Updated session state selected rows: {st.session_state.selected_rows}")
+        else:
+            logger.debug("No selected rows to update.")
+            
         # Update selected files and metadata in session state
         self._update_selected_files_and_metadata(grid_response)
             
@@ -668,7 +687,7 @@ class FileFilterApp:
         filtered_files = [f for f in files if Path(f).suffix.lower() in valid_extensions]
         
         # Log the filtered files for debugging
-        logger.debug(f"Filtered files: {filtered_files}")
+        #logger.debug(f"Filtered files: {filtered_files}")
         
         return filtered_files
     
