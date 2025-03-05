@@ -296,8 +296,15 @@ class FileFilterApp:
             self._render_right_column()
        
     # Define the callback function to reset the app when the path changes
-    def _on_path_change(self):
+    @staticmethod
+    def _on_path_change():
         self._reset_app(st.session_state["path_input"])    
+        
+    @staticmethod    
+    def _on_extension_filter_change():
+        """Callback function to handle changes in the extension filter."""
+        # Update the session state with the new filter value
+        st.session_state["extension_filter"] = st.session_state["extension_filter_widget"]
 
     def _render_left_column(self):
         st.header("File Selection")
@@ -350,10 +357,20 @@ class FileFilterApp:
         if self._is_valid_directory():
             
             # File type selection
-            new_extension_filter = st.radio("Select file type:", ["All", ".fio", ".nxs"], horizontal=True, key="extension_filter")
-            if new_extension_filter != st.session_state["extension_filter"]:
-                st.session_state["extension_filter"] = new_extension_filter
-                #st.rerun()
+            #new_extension_filter = st.radio("Select file type:", ["All", ".fio", ".nxs"], horizontal=True, key="extension_filter")
+            #if new_extension_filter != st.session_state["extension_filter"]:
+            #    st.session_state["extension_filter"] = new_extension_filter
+            #    st.rerun()
+
+            # File type selection with on_change callback
+            new_extension_filter = st.radio(
+                "Select file type:",
+                ["All", ".fio", ".nxs"],
+                horizontal=True,
+                key="extension_filter_widget",
+                on_change=self._on_extension_filter_change  # Callback to update session state
+            )
+
 
             # File name filter (triggers rerun automatically on change)
             st_keyup("Filter filenames by string:", key="file_filter", debounce=100) #debounce 100ms
@@ -493,7 +510,7 @@ class FileFilterApp:
         combined_metadata = combined_metadata.filter(
             pl.col("filename").is_in(filtered_files)
         )
-        
+                
         logging.debug(f"Combined metadata with selection {st.session_state.extension_filter} :")
         logging.debug(f"Type of combined_metadata: {type(combined_metadata)}")
         logging.debug(f"\N{rainbow}\N{rainbow}\N{rainbow} {combined_metadata}")
@@ -515,26 +532,46 @@ class FileFilterApp:
         gb = GridOptionsBuilder.from_dataframe(df_pd)
         column_widths = self.compute_optimal_column_widths(metadata)
         for col, width in column_widths.items():
-            gb.configure_column(col, width=width, wrapText=True, autoHeight=True)
-       
-        gb.configure_column("filename", width=200, wrapText=True, autoHeight=True, checkboxSelection=True)
-        gb.configure_selection(selection_mode="multiple", use_checkbox=True)
+            gb.configure_column(col, width=width, wrapText=True, autoHeight=True, checkboxSelection=(col == "filename"))
+
+        gb.configure_selection(
+            selection_mode="multiple",        # Enable multiple row selection
+            use_checkbox=True,                # Use checkboxes for selection
+            rowMultiSelectWithClick=True,     # Allow Shift/Ctrl (Cmd) selection
+            suppressRowDeselection=False,     # Allow deselection by clicking again
+            suppressRowClickSelection=False   # Allow selection by clicking anywhere in the row
+        )
+
         gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=20)
         grid_options = gb.build()
         grid_options["defaultColDef"] = {
             "cellStyle": {"font-size": "10px"}
         }
         # Display AgGrid table
-        grid_response = AgGrid(df_pd, gridOptions=grid_options, 
-                               height=400, fit_columns_on_grid_load=True)
+        
+        try:
+            grid_response = AgGrid(
+                df_pd, 
+                gridOptions=grid_options, 
+                update_mode=GridUpdateMode.SELECTION_CHANGED, #Update, when selection changes 
+                height=400, 
+                fit_columns_on_grid_load=True,
+                key= 'selection_metadata_df'
+            )
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
+            logging.exception("AgGrid failed")  # Logs full traceback
+
+        selected_rows = grid_response["selected_rows"]
+        st.write("Selected Rows:", selected_rows)
+        st.write('Event triggered ', grid_response.event_data)
+        #st.write("Grid options:", grid_options)
 
         # Log grid response for debugging
         logger.debug("Grid Response Data: %s", grid_response.data)
         logger.debug("Grid Selected Rows: %s", grid_response.selected_rows)
-        
-        
-  
-
+        logger.debug("Type grid selected rows: %s", type(grid_response.selected_rows))
+            
         return grid_response
     
     def _update_selected_files_and_metadata(self, grid_response):
