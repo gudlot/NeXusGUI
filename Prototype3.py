@@ -523,7 +523,7 @@ class FileFilterApp:
             pl.col("scan_id").cast(pl.Int64, strict=False)
         ).sort("scan_id")
         
-    def _display_aggrid_table(self, metadata):
+    def _display_aggrid_table(self, metadata, grid_key):
         """Displays the metadata DataFrame in an AgGrid table."""
         # Convert Polars DataFrame to Pandas
         df_pd = metadata.to_pandas()
@@ -556,7 +556,7 @@ class FileFilterApp:
                 update_mode=GridUpdateMode.SELECTION_CHANGED, #Update, when selection changes 
                 height=400, 
                 fit_columns_on_grid_load=True,
-                key= 'selection_metadata_df'
+                key=grid_key
             )
         except Exception as e:
             st.error(f"An error occurred: {e}")
@@ -629,9 +629,14 @@ class FileFilterApp:
 
         # Sort metadata by scan_id
         combined_metadata = self._sort_metadata(combined_metadata)
+        
+        # Generate dynamic key based on selected dataset (all, fio, nxs)
+        dataset_key = st.session_state.get("extension_filter", "all")  # Default to 'all' if not set
+        grid_key = f"aggrid_{dataset_key}"  # Ensures AgGrid resets when dataset changes
+
 
         # Display the table using AgGrid
-        grid_response = self._display_aggrid_table(combined_metadata)
+        grid_response = self._display_aggrid_table(combined_metadata, grid_key)
 
         # Update selected files and metadata in session state
         self._update_selected_files_and_metadata(grid_response)
