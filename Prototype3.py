@@ -148,6 +148,7 @@ class FileFilterApp:
             "selected_metadata": None,
             "extension_filter": "All",
             "file_filter": "",
+            "selected_rows": []  # Initialize selected_rows in session state
         }
         
         for key, value in session_state_defaults.items():
