@@ -32,7 +32,7 @@ class NeXusProcessor:
 
             if isinstance(item, h5py.Group):
                 if item.attrs.get("NX_class") in [b"NXentry", "NXentry"]:
-                    print('\n', item, full_path, '\n')
+                    #print('\n', item, full_path, '\n')
                     return item, full_path  # Immediately return the first match
                 
                 # Recursively search deeper
@@ -61,23 +61,13 @@ class NeXusProcessor:
                 
                 
                 self._extract_datasets(nx_entry)
-                
-                
-                print(100*"\N{rainbow}")
-                print(100*"\N{peacock}")
-                for key in self.data_dict: 
-                    print(key)
-                print(100*"\N{peacock}")
-                print(100*"\N{rainbow}")
-                    
+                               
                                 
-                print(100*"\N{cherries}")
+            
                 scan_metadata = self._extract_scan_metadata(nx_entry)
-                print(100*"\N{rainbow}")
+           
                 self.data_dict.update(scan_metadata)
-                print(self.data_dict["scan_command"])
-                print(self.data_dict["scan_id"])
-                print(100*"\N{hot pepper}")
+               
                     
                 # Log broken links
                 broken_links = [k for k, v in self.structure_dict.items() if v.get("type") == "broken_link"]
@@ -99,15 +89,15 @@ class NeXusProcessor:
 
         def process_item(name: str, obj):
             path = f"{self.nx_entry_path}/{name}"
-            print(f"DEBUG: Processing {path}")  # Log path being processed
+            #print(f"DEBUG: Processing {path}")  # Log path being processed
 
             try:
                 if isinstance(obj, h5py.Dataset):
-                    print(f"DEBUG: Found Dataset - {path}")  # Log dataset processing
+                    #print(f"DEBUG: Found Dataset - {path}")  # Log dataset processing
                     self._store_dataset(path, obj)
 
                 elif isinstance(obj, h5py.Group):
-                    print(f"DEBUG: Found Group - {path}")  # Log group processing
+                    #print(f"DEBUG: Found Group - {path}")  # Log group processing
                     nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", ""), bytes) else obj.attrs.get("NX_class", "")
 
                     if nx_class == "NXdata":
@@ -115,7 +105,7 @@ class NeXusProcessor:
                         if isinstance(signal, bytes):
                             signal = signal.decode()
 
-                        print(f"DEBUG: Signal dataset = {signal}")  # Log signal dataset
+                        #print(f"DEBUG: Signal dataset = {signal}")  # Log signal dataset
 
                         if signal and signal in obj:
                             dataset_path = f"{path}/{signal}"
@@ -134,8 +124,10 @@ class NeXusProcessor:
                                             self._store_dataset(dataset_path, linked_dataset)
                                     except Exception as e:
                                         logging.warning(f"Skipping broken external link {dataset_path}: {e}")
+                                        self.structure_dict[dataset_path] = {"type": "broken_link"}  # Mark as broken link
                                 else:
                                     logging.warning(f"Skipping missing external link: {dataset_path} -> {external_file}")
+                                    self.structure_dict[dataset_path] = {"type": "broken_link"}  # Mark as broken link
 
                             elif isinstance(dataset, h5py.Dataset):
                                 self._store_dataset(dataset_path, dataset)
@@ -155,7 +147,7 @@ class NeXusProcessor:
 
             if isinstance(link_obj, h5py.SoftLink):
                 target_path = link_obj.path
-                print(f"DEBUG: Found soft link {path} -> {target_path}")
+                #print(f"DEBUG: Found soft link {path} -> {target_path}")
 
                 # Store soft link reference in a unified format
                 #self.data_dict[path] = {
@@ -215,10 +207,8 @@ class NeXusProcessor:
         
         metadata = {}
         program_name_path = f"{self.nx_entry_path}/program_name"
-        print(100*"\N{cherries}")
-    
-        
-        logging.debug(f"Here we go nx_entry path: {nx_entry.name}")
+               
+        #logging.debug(f"Here we go nx_entry path: {nx_entry.name}")
 
         # Check if 'program_name' dataset exists
         if "program_name" in nx_entry:
@@ -238,7 +228,7 @@ class NeXusProcessor:
                     if (value := program_name_dataset.attrs.get(key, "N/A")) is not None
                 })
 
-                logging.debug(f"Extracted metadata: {metadata}")
+                #logging.debug(f"Extracted metadata: {metadata}")
 
             except OSError as e:
                 logging.warning(f"Skipping 'program_name' due to broken external link: {e}")
@@ -257,11 +247,11 @@ class NeXusProcessor:
             "scan_id": self.data_dict.get("scan_id", {"value": "N/A"}).get("value", "N/A"),
         }
 
-        print(100*"\N{aubergine}")
+        print(75*"\N{aubergine}")
         print("DEBUG: self.data_dict before processing:")
         for key, value in self.data_dict.items():
             print(f"{key}: {value}")
-        print(100*"\N{aubergine}")
+        print(75*"\N{aubergine}")
 
         # Iterate over extracted datasets and metadata
         for key, info in self.data_dict.items():
@@ -284,8 +274,8 @@ class NeXusProcessor:
             if isinstance(info, dict) and "unit" in info:
                 result[f"{key}_unit"] = info["unit"]
 
-        print("DEBUG: Final result:", result)  
-        print(100*"\N{blueberries}")
+        #print("DEBUG: Final result:", result)  
+        print(20*"\N{blueberries}")
         return result
     
     def _resolve_lazy_dataset(self, path: str):
@@ -313,7 +303,7 @@ class NeXusProcessor:
                     }
 
                 else:
-                    print(f"⚠️ DEBUG: {path} is an unknown type: {type(obj)}")
+                    print(f"DEBUG: {path} is an unknown type: {type(obj)}")
                     return None  
 
         except Exception as e:
@@ -334,7 +324,10 @@ class NeXusBatchProcessor(BaseProcessor):
 
     def update_files(self):
         """Check for new files in the directory and update the file list while maintaining order."""
-        all_files = sorted(self.directory.glob("*.nxs"))  # Ensure a sorted order
+        
+        logging.info(f"Current path in update_files: {self.directory}")
+        
+        all_files = sorted(self.directory.glob("*.nxs"))  # Retrieve and sort all files
         existing_files = set(self.processed_files.keys())
 
         self.nxs_files = [file for file in all_files if str(file) not in existing_files] + [
@@ -349,7 +342,10 @@ class NeXusBatchProcessor(BaseProcessor):
 
     def process_files(self, force_reload: bool = False):
         """Processes all NeXus files, caching results and avoiding redundant work."""
+        
+        logging.info(f"Current path in process_files: {self.directory}")
         self.update_files()  # Check for new files before processing
+        logging.info(f"After update files path in process files: {self.directory}")
         
         if force_reload:
             self.structure_list.clear()
@@ -477,83 +473,99 @@ class NeXusBatchProcessor(BaseProcessor):
 
 
 if __name__ == "__main__":
+      
+    def test_broken():
     
-    
-    
-    file_path = Path("/Users/lotzegud/P08/healthy/nai_250mm_02290.nxs")
-    print(f"File exists: {file_path.exists()}")
-    print(f"Absolute path: {file_path.resolve()}")
+        broken=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
+        broken.process()
         
-    sproc=NeXusProcessor("/Users/lotzegud/P08/healthy/nai_250mm_02290.nxs")
-    sproc.process()
-    res= sproc.to_dict()
+        broken_data = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
+        df_broken= broken_data.get_dataframe()
+        
+        print(df_broken.head())    
+        
+    test_broken()
+        
+    
+    def test_health():
+        file_path = Path("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02349.nxs")
+        print(f"File exists: {file_path.exists()}")
+        print(f"Absolute path: {file_path.resolve()}")
+            
+        sproc=NeXusProcessor(file_path)
+        sproc.process()
+        res= sproc.to_dict()
+
+        
+        print(75*"\N{mango}")
+        for key, value in res.items(): 
+            print(key, value)
+            if key == "/scan/ion_bl/mode":
+                print('This is ', type(value))
+            if key == "/scan/start_time":
+                print('This is start_time ', type(value))
+        print(75*"\N{mango}")
+
+        '''
+        #h5ls -r /Users/lotzegud/P08/healthy/nai_250mm_02290.nxs
+        
+        # Check if the file exists
+        if not file_path.exists():
+            print(f"Error: File does not exist at {file_path.resolve()}")
+        else:
+            with h5py.File(file_path, "r") as f, open("/Users/lotzegud/P08/hdf5_structure.txt", "w") as output_file:
+                def print_structure(name, obj):
+                    output_file.write(f"Path: {name}\n")
+                    for attr in obj.attrs:
+                        output_file.write(f"  - Attribute: {attr} = {obj.attrs[attr]}\n")
+
+                f.visititems(print_structure)
+
+        print("Output saved to hdf5_structure.txt")
+            
+        '''
+
+        # Initialize the NeXusBatchProcessor with the directory containing .nxs files
+        processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
+        #processor = NeXusBatchProcessor("/Users/lotzegud/P08/healthy/")
+        
+        # Process the files and get the DataFrame
+        df = processor.get_dataframe()
+                
+        #for col in df.columns:
+        #    print(col)   
+        
+        
+        # Print the DataFrame
+        print("Processed DataFrame:")
+        
+        pl.Config.set_tbl_rows(10)  # Set maximum displayed row
+        #pl.Config.set_tbl_rows(None)  # Show all rows
+        print(df)
+        
+        
+        print(75*"\N{hot pepper}")
+
 
     
-    print(100*"\N{mango}")
-    for key, value in res.items(): 
-        print(key, value)
-        if key == "/scan/ion_bl/mode":
-            print('This is ', type(value))
-        if key == "/scan/start_time":
-            print('This is start_time ', type(value))
-    print(100*"\N{mango}")
+        
+        print(75*"\N{blueberries} ")
+        
+        df_lazy= processor.get_lazy_dataframe()
+        print(df_lazy.head())
+        
+        #print(df_lazy.collect_schema().names)
+        #for col_name in df_lazy.schema:
+        #   print(col_name)
+        #df= processor.get_dataframe()
+        #print(df.head())
 
-    '''
-    #h5ls -r /Users/lotzegud/P08/healthy/nai_250mm_02290.nxs
-    
-    # Check if the file exists
-    if not file_path.exists():
-        print(f"Error: File does not exist at {file_path.resolve()}")
-    else:
-        with h5py.File(file_path, "r") as f, open("/Users/lotzegud/P08/hdf5_structure.txt", "w") as output_file:
-            def print_structure(name, obj):
-                output_file.write(f"Path: {name}\n")
-                for attr in obj.attrs:
-                    output_file.write(f"  - Attribute: {attr} = {obj.attrs[attr]}\n")
+        #print(75*"\N{mango}")
+        ##now eager, and it looks like ti works 
+        #df_eager = df_lazy.collect()
+        #print(df_eager.head())  # Now it prints real data
+        
+        
+        hdf5_path = df["/scan/apd/data"][0]  # Get the path from the first row of the column
 
-            f.visititems(print_structure)
-
-    print("Output saved to hdf5_structure.txt")
-          
-    '''
-
-    # Initialize the NeXusBatchProcessor with the directory containing .nxs files
-    #processor = NeXusBatchProcessor("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/")
-    processor = NeXusBatchProcessor("/Users/lotzegud/P08/healthy/")
-    
-    # Process the files and get the DataFrame
-    df = processor.get_dataframe()
-              
-    #for col in df.columns:
-    #    print(col)   
-    
-    
-    # Print the DataFrame
-    print("Processed DataFrame:")
-    
-    pl.Config.set_tbl_rows(10)  # Set maximum displayed row
-    #pl.Config.set_tbl_rows(None)  # Show all rows
-    print(df)
-       
-    
-    print(100*"\N{hot pepper}")
-
-
-    print(df["/scan/instrument/source/probe"])
-    
-    
-    print(100*"\N{blueberries}")
-    
-    df_lazy= processor.get_lazy_dataframe()
-    print(df_lazy.head())
-       
-    #print(df_lazy.collect_schema().names)
-    #for col_name in df_lazy.schema:
-    #   print(col_name)
-    #df= processor.get_dataframe()
-    #print(df.head())
-
-    print(100*"\N{mango}")
-    #now eager, and it looks like ti works 
-    df_eager = df_lazy.collect()
-    print(df_eager.head())  # Now it prints real data
+        print("HDF5 path:", hdf5_path)  # Print the HDF5 path
