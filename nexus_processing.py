@@ -89,15 +89,31 @@ class NeXusProcessor:
 
         def process_item(name: str, obj):
             path = f"{self.nx_entry_path}/{name}"
-            #print(f"DEBUG: Processing {path}")  # Log path being processed
-
+            
             try:
                 if isinstance(obj, h5py.Dataset):
                     #print(f"DEBUG: Found Dataset - {path}")  # Log dataset processing
+                    
+                    self.structure_dict[path] = {
+                        "type": "dataset",
+                        "shape": obj.shape,
+                        "dtype": str(obj.dtype),
+                        "unit": obj.attrs.get("unit", ""),
+                        "NX_class": obj.attrs.get("NX_class", "")
+                    }
+                    
                     self._store_dataset(path, obj)
 
                 elif isinstance(obj, h5py.Group):
                     #print(f"DEBUG: Found Group - {path}")  # Log group processing
+                    # Record group information
+                    self.structure_dict[path] = {
+                        "type": "group",
+                        "NX_class": obj.attrs.get("NX_class", ""),
+                        "children": []
+                    }
+                    
+                    
                     nx_class = obj.attrs.get("NX_class", b"").decode() if isinstance(obj.attrs.get("NX_class", ""), bytes) else obj.attrs.get("NX_class", "")
 
                     if nx_class == "NXdata":
@@ -116,7 +132,7 @@ class NeXusProcessor:
                                 external_file = dataset.filename
                                 external_file_path = os.path.join(os.path.dirname(self.file_path), external_file)
 
-                                if os.path.exists(external_file_path):
+                                if Path(external_file_path).exists():
                                     print(f"DEBUG: External link is valid: {external_file_path}")
                                     try:
                                         with h5py.File(external_file_path, "r") as ext_file:
@@ -125,9 +141,12 @@ class NeXusProcessor:
                                     except Exception as e:
                                         logging.warning(f"Skipping broken external link {dataset_path}: {e}")
                                         self.structure_dict[dataset_path] = {"type": "broken_link"}  # Mark as broken link
+                                        # Raise an exception for broken external links
+                                        raise RuntimeError(f"Broken external link at {dataset_path}: {e}")
                                 else:
                                     logging.warning(f"Skipping missing external link: {dataset_path} -> {external_file}")
                                     self.structure_dict[dataset_path] = {"type": "broken_link"}  # Mark as broken link
+                                    raise RuntimeError(f"Missing external link: {dataset_path} -> {external_file}")
 
                             elif isinstance(dataset, h5py.Dataset):
                                 self._store_dataset(dataset_path, dataset)
@@ -148,6 +167,13 @@ class NeXusProcessor:
             if isinstance(link_obj, h5py.SoftLink):
                 target_path = link_obj.path
                 #print(f"DEBUG: Found soft link {path} -> {target_path}")
+                
+                # Record soft link information
+                self.structure_dict[path] = {
+                    "type": "soft_link",
+                    "target": target_path
+                }
+
 
                 # Store soft link reference in a unified format
                 #self.data_dict[path] = {
@@ -247,11 +273,11 @@ class NeXusProcessor:
             "scan_id": self.data_dict.get("scan_id", {"value": "N/A"}).get("value", "N/A"),
         }
 
-        print(75*"\N{aubergine}")
-        print("DEBUG: self.data_dict before processing:")
-        for key, value in self.data_dict.items():
-            print(f"{key}: {value}")
-        print(75*"\N{aubergine}")
+        #print(75*"\N{aubergine}")
+        #print("DEBUG: self.data_dict before processing:")
+        #for key, value in self.data_dict.items():
+        #    print(f"{key}: {value}")
+        #print(75*"\N{aubergine}")
 
         # Iterate over extracted datasets and metadata
         for key, info in self.data_dict.items():
@@ -479,13 +505,22 @@ if __name__ == "__main__":
         broken=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
         broken.process()
         
+            
         broken_data = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
         df_broken= broken_data.get_dataframe()
         
         print(df_broken.head())    
         
+        
+        
     test_broken()
         
+    def test_raw():
+        file_path=Path("/Users/lotzegud/P08/11019623/raw")
+        batch_proc=NeXusBatchProcessor(file_path)
+        df = batch_proc.get_dataframe()
+        
+    
     
     def test_health():
         file_path = Path("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02349.nxs")
