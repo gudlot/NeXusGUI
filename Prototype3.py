@@ -7,13 +7,30 @@ import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 import logging
 import re
-import h5py 
+
+import numpy as np
 from nexus_processing import NeXusBatchProcessor
 from fio_processing import FioBatchProcessor
 from data_controller import DataController
 
+
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+# Set the default font to DejaVu Sans
+plt.rcParams['font.family'] = 'DejaVu Sans'
+
+import matplotlib as mpl
+print(mpl.get_cachedir())
+
+# Suppress Matplotlib debug logging (including font matching)
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+
+
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="st_aggrid")
+
+
+TIME_COLUMN = "/scan/data/epoch"
 
 
 
@@ -304,6 +321,9 @@ class FileFilterApp:
 
         # Initialize the controller with the DataFrames
         self.controller = DataController(self.nxs_df, self.fio_df)
+        
+        st.write(isinstance(self.nxs_df, pl.LazyFrame))
+                     
 
         # Create two columns, with the right column wider for plotting
         col1, col2 = st.columns([2, 3])
@@ -767,15 +787,13 @@ class FileFilterApp:
         
         return files
 
-        
-    
-
     def _render_plot_options(self):
         st.header("Plot Options")
 
         if self.selected_files:
-            time_column = "/scan/data/epoch"
-            time_options = [f"{time_column} (Unix)", f"{time_column} (Datetime)"]
+            # Define the actual column name and time options
+            time_column = TIME_COLUMN
+            time_options = ["Unix", "Datetime"]  # Display options for time format
 
             # Ensure we don’t modify cached data in place
             column_names = self.controller.get_column_names(self.selected_files).copy()
@@ -788,21 +806,23 @@ class FileFilterApp:
             col1, col2 = st.columns([3, 1])
 
             with col1:
-                t = st.selectbox("Select time:", time_options, key="plot_option_t")
+                # Display time format options (Unix or Datetime)
+                time_format = st.selectbox("Select time format:", time_options, key="plot_option_t_format")
                 x = st.selectbox("Select x:", list(column_names.keys()), key="plot_option_x")
                 y = st.selectbox("Select y:", list(column_names.keys()), key="plot_options_y")
                 z = st.selectbox("Select Normalization:", list(column_names.keys()), key="plot_options_z")
 
             with col2:
                 t_radio = st.radio("", ["Use", "Ignore"], key="plot_options_t_radio")
-                x_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x_radio")
+                x_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x_radio", index=1)
                 y_radio = st.radio("", ["Use", "Ignore"], key="plot_options_y_radio")
                 z_radio = st.radio("", ["Use", "Ignore"], key="plot_options_z_radio", index=1)  # Default to Ignore
 
             normalize = st.checkbox("Normalize data", value=False, key="plot_options_normalize")
 
             if st.button("Plot", key="plot_options_plot"):
-                x_axis = x if x_radio == "Use" else (t if t_radio == "Use" else t)  # Default to t
+                # Use the actual column name for time
+                x_axis = x if x_radio == "Use" else (time_column if t_radio == "Use" else None)
                 y_axis = y if y_radio == "Use" else None
                 z_axis = z if z_radio == "Use" else None
 
@@ -813,19 +833,14 @@ class FileFilterApp:
                 logger.debug(f"Selected x-axis: {x_axis}")
                 logger.debug(f"Selected y-axis: {y_axis}")
                 logger.debug(f"Selected z-axis: {z_axis}")
+                logger.debug(f"Selected time format: {time_format}")
 
-                self.plot_data(x_axis, y_axis, z_axis, normalize)
-
-         
-    def plot_data(self, x_axis: str, y_axis: str, z_axis: str = None, normalize: bool = False):
+                # Pass the time format to the plotting function
+                self.plot_data(x_axis, y_axis, z_axis, normalize, time_format)    
+    
+    def plot_data(self, x_axis: str, y_axis: str, z_axis: str = None, normalize: bool = False, time_format: str = "Unix"):
         """
         Plots data based on the selected columns and files.
-
-        Args:
-            x_axis (str): The column name for the x-axis.
-            y_axis (str): The column name for the y-axis.
-            z_axis (str): The column name for normalization (optional).
-            normalize (bool): Whether to normalize the data.
         """
         if not self.selected_files:
             st.warning("No files selected for plotting.")
@@ -833,68 +848,145 @@ class FileFilterApp:
 
         try:
             # Retrieve data for the selected files and columns
-            plot_data = self.controller.process_selected_files(self.selected_files, x_axis, y_axis, z_axis if normalize else None)
+            df_plot = self.controller.process_selected_files(
+                self.selected_files, x_axis, y_axis, z_axis, normalize
+            )
 
-            # Format and broadcast data
-            plot_data = self.controller._format_and_broadcast_data(plot_data, x_axis, y_axis)
+            print("DataFrame df_plot Structure:")
+            print(df_plot.head())  # Print the first few rows of the DataFrame
+            print("\nDataFrame Columns:")
+            print(df_plot.columns)  # Check the columns
+            print("\nDataFrame Types:")
+            print(df_plot.schema)  # Check data types of the columns
 
-            # Normalize data if required
-            if normalize and z_axis:
-                if z_axis in plot_data.columns:
-                    # Perform normalization (divide y-axis by z-axis)
-                    plot_data = plot_data.with_columns(
-                        (pl.col(y_axis) / pl.col(z_axis)).alias(y_axis)
-                    )
-                else:
-                    st.warning(f"Normalization column '{z_axis}' not found in the data.")
-                    normalize = False  # Disable normalization
+            # Convert time column if necessary
+            if x_axis == TIME_COLUMN and time_format == "Datetime":
+                df_plot = df_plot.with_columns(pl.col(TIME_COLUMN).cast(pl.Datetime).alias(TIME_COLUMN))
+
+            # Format and broadcast data using DataController's method
+            df_plot = self.controller._format_and_broadcast_data(df_plot, x_axis, y_axis, z_axis if normalize else None)
 
             # Convert Polars DataFrame to Pandas for plotting
-            plot_data_pd = plot_data.to_pandas()
+            df_plot_pd = df_plot.to_pandas()
+
+            # Store the plot data for later use
+            self.plot_data_dict = {  # Renamed to avoid conflict
+                'data': df_plot_pd,
+                'x_axis': x_axis,
+                'y_axis': y_axis,
+                'normalize': normalize
+            }
+            
+              # Debugging: Inspect the DataFrame structure
+            print("DataFrame End of plot_data Structure:")
+            print(df_plot_pd.head())  # Print the first few rows of the DataFrame
+            print("\nDataFrame Columns:")
+            print(df_plot_pd.columns)  # Check the columns
+            print("\nDataFrame Types:")
+            print(df_plot_pd.dtypes)  # Check data types of the columns
+
 
             # Generate the plot
-            self._generate_plot(plot_data_pd, x_axis, y_axis, normalize)
+            self._generate_plot(df_plot_pd, x_axis, y_axis, normalize)
 
         except Exception as e:
             st.error(f"An error occurred while plotting: {e}")
             logger.error(f"Plotting error: {e}", exc_info=True)
-            
 
-    def _generate_plot(self, data: pd.DataFrame, x_axis: str, y_axis: str):
+    def _generate_plot(self, data: pd.DataFrame, x_axis: str, y_axis: str, normalize: bool = False):
         """
-        Generates a plot using Matplotlib.
+        Generates a plot using Matplotlib with unique markers and colors per file.
 
         Args:
             data (pd.DataFrame): The data to plot.
             x_axis (str): The column name for the x-axis.
             y_axis (str): The column name for the y-axis.
+            normalize (bool): Whether to normalize the y-axis data.
         """
-        import matplotlib.pyplot as plt
-        
-        # Assign markers and colors
-        markers = {i: marker for i, marker in zip(selected_files, itertools.cycle(['o', 's', 'D', '^', 'v', '<', '>']))}
-        colors = {i: color for i, color in zip(selected_files, itertools.cycle(plt.cm.tab10.colors))}
-               
+        # Debugging: Inspect the DataFrame structure
+        print("DataFrame Structure:")
+        print(data.head())  # Print the first few rows of the DataFrame
+        print("\nDataFrame Columns:")
+        print(data.columns)  # Check the columns
+        print("\nDataFrame Types:")
+        print(data.dtypes)  # Check data types of the columns
+
+        # Debugging: Check the unique filenames
+        unique_filenames = data["filename"].unique()
+        print("\nUnique Filenames:")
+        print(unique_filenames)
+
+        num_files = len(unique_filenames)
 
         plt.figure(figsize=(10, 6))
-        plt.plot(data[x_axis], data[y_axis], marker="o", linestyle="-", color="b")
+
+        # Dynamically generate unique markers and colors based on the number of files
+        marker_list = np.array(["o", "s", "D", "^", "v", "<", ">", "p", "*", "h", "H", "X", "P"])
+        color_list = plt.cm.get_cmap("tab20", num_files).colors if num_files > 10 else plt.cm.tab10.colors
+
+        # Ensure we have enough unique markers and colors
+        markers = {f: marker_list[i % len(marker_list)] for i, f in enumerate(unique_filenames)}
+        colors = {f: color_list[i % len(color_list)] for i, f in enumerate(unique_filenames)}
+
+        # Check if y-axis contains categorical values
+        if data[y_axis].dtype == "object":
+            unique_categories = sorted(data[y_axis].unique())
+            category_map = {cat: i for i, cat in enumerate(unique_categories)}
+            data[y_axis] = data[y_axis].map(category_map)
+
+            category_legend_labels = [f"{num}: {cat}" for cat, num in category_map.items()]
+        else:
+            category_legend_labels = None
+
+        # Plot each filename with a unique marker and color
+        for filename, subset in data.groupby("filename"):
+            # Use the full path for the legend if needed
+            plt.plot(subset[x_axis], subset[y_axis],
+                    marker=markers[filename], linestyle="-", color=colors[filename],
+                    label=filename)  # `label=filename` is key here
+
+        # Labels and title
         plt.xlabel(x_axis)
-        plt.ylabel(y_axis)
+        plt.ylabel(f"{y_axis} (Normalized)" if normalize else y_axis)
         plt.title(f"{y_axis} vs {x_axis}")
+
+        # Grid and main legend (filename-based)
         plt.grid(True)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+
+        # Add categorical legend below the plot if applicable
+        if category_legend_labels:
+            plt.figtext(0.5, -0.1, "\n".join(category_legend_labels), ha="center", fontsize=10,
+                        bbox={"facecolor": "lightgray", "alpha": 0.5, "pad": 5})
+
+        # Display plot in Streamlit
         st.pyplot(plt)
 
 
 
+
     def _render_right_column(self):
+        """
+        Renders the plotting area in the right column of the app.
+        """
         st.header("Plotting Area")
-        if self.plot_data:
-            # Render the plot here
-            pass
+
+        # Check if plot data is available
+        if hasattr(self, 'plot_data_dict') and self.plot_data_dict is not None:
+            try:
+                # Call the _generate_plot method to render the plot
+                self._generate_plot(
+                    data=self.plot_data_dict['data'],
+                    x_axis=self.plot_data_dict['x_axis'],
+                    y_axis=self.plot_data_dict['y_axis'],
+                    normalize=self.plot_data_dict.get('normalize', False)  # Default to False if not provided
+                )
+            except Exception as e:
+                st.error(f"An error occurred while rendering the plot: {e}")
+                logger.error(f"Plot rendering error: {e}", exc_info=True)
         else:
             st.write("No data to plot yet.")
-            
- 
+        
  
 
 if __name__ == "__main__":
