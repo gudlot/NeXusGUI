@@ -510,11 +510,7 @@ class NeXusBatchProcessor(BaseProcessor):
                     return value["lazy"]  # Return the lazy function itself
             if "source" in value:
                 return value["source"]  # Keep soft link as a reference
-        # Check for inconsistent types
-        if not isinstance(value, (float, int, str, type(None))):  # Add other allowed types as needed
-            raise ValueError(
-                f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
-            )
+        
         return value  # Return normal values
 
 
