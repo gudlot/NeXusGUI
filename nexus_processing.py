@@ -13,10 +13,17 @@ logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)  # Define the logger instance
 
 
+def load_on_demand(directory: Path, file_name: str, dataset_name: str) -> pl.Series:
+    """Reopen file and load dataset when needed, using the directory to resolve the full path."""
+    file_path = directory / file_name  # Combine the directory and the relative file name
+    with h5py.File(file_path, "r") as f:
+        return pl.Series(dataset_name, f[dataset_name][:])
+
 class NeXusProcessor:
     def __init__(self, file_path: str):
         """Initialise the processor with a NeXus file path."""
         self.file_path = Path(file_path)
+        self.directory = self.file_path.parent  # Automatically extract the directory from file_path
         self.data_dict: Dict[str, Dict[str, Any]] = {}  # Stores dataset paths, values, and units
         self.structure_dict: Dict[str, Any] = {}  # Stores hierarchical structure
         self.nx_entry_path: Optional[str] = None  # Path to NXentry group
@@ -188,6 +195,8 @@ class NeXusProcessor:
         nx_entry.visititems_links(process_link)
 
 
+
+
     def _store_dataset(self, path: str, obj: h5py.Dataset):
         """Efficiently stores dataset values and unit information in data_dict."""
         try:
@@ -205,12 +214,8 @@ class NeXusProcessor:
                 file_path = str(self.file_path)  # Store file path
                 dataset_name = obj.name  # Store dataset path
 
-                def load_on_demand():
-                    """Reopen file and load dataset when needed."""
-                    with h5py.File(file_path, "r") as f:
-                        return pl.Series(dataset_name, f[dataset_name][:])
-
-                value = {"lazy": load_on_demand}  # Mark as lazy function
+                # Mark the dataset as lazy-loaded
+                value = {"lazy": lambda: load_on_demand(self.directory, file_path, dataset_name)}
             
             else:
                 logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
@@ -427,8 +432,6 @@ class NeXusBatchProcessor(BaseProcessor):
         key_types = defaultdict(lambda: defaultdict(set))  # Store encountered types for each key and the files they appeared in
         key_shapes = defaultdict(lambda: defaultdict(set))  # Store encountered shapes for each key (for arrays)
         key_units = defaultdict(lambda: defaultdict(set))  # Store encountered unit attributes for each key
-
-        print(f"Processed {len(self.processed_files)} files")
         
         if not self.processed_files:
             print("No files found in processed_files.")
@@ -436,7 +439,7 @@ class NeXusBatchProcessor(BaseProcessor):
 
         # Iterate over each file and its associated nested dictionary
         for path, nested_dict in self.processed_files.items():  
-            print(f"Checking file: {path}")
+            logging.info(f"Checking file: {path}")
             
             if not nested_dict:
                 print(f"  Warning: File {path} has an empty dictionary.")
@@ -465,7 +468,7 @@ class NeXusBatchProcessor(BaseProcessor):
                     key_types[key][type(value)].add(path)
 
         # Summary of inconsistencies
-        print("\nSummary of inconsistencies:")
+        logging.info("\nSummary of inconsistencies:")
         found_inconsistencies = False
         for key, types in key_types.items():
             if len(types) > 1:  # More than one type for a key means inconsistency
@@ -566,7 +569,6 @@ class NeXusBatchProcessor(BaseProcessor):
         if self._df is not None:
             return self._df
 
-        # Use `_resolve_lazy_value` for evaluation
         return self._build_dataframe(resolve=True)  # Now loads actual values
 
 
@@ -590,13 +592,61 @@ class NeXusBatchProcessor(BaseProcessor):
         return self._df.lazy()
 
     
-    def evaluate_lazy_column(self, df: pl.DataFrame, column_name: str) -> pl.Series:
-        """Evaluate a specific lazy-loaded column in a Polars DataFrame."""
-        if column_name not in df.columns:
-            raise ValueError(f"Column '{column_name}' not found in DataFrame.")
+    def _resolve_lazy_value(self, file_name: str, dataset_name: str):
+        """Resolve the lazy-loaded value by opening the HDF5 file and loading the dataset using load_on_demand."""
+        try:
+            # Use load_on_demand to load the dataset
+            return load_on_demand(self.directory, file_name, dataset_name)
+        except Exception as e:
+            # Handle exceptions, possibly logging or raising custom error
+            raise ValueError(f"Failed to load '{dataset_name}' from '{file_name}': {e}")
 
-        return df[column_name].map_elements(self._resolve_lazy_value, return_dtype=pl.Object)
-    
+
+
+    #def evaluate_lazy_column(self, df: pl.DataFrame, column_name: str, dataset_name: str) -> pl.Series:
+    #    """Evaluate a specific lazy-loaded column in a Polars DataFrame."""
+    #    if column_name not in df.columns:
+    #        raise ValueError(f"Column '{column_name}' not found in DataFrame.")
+    #    
+    #    return df[column_name].apply(
+    #        lambda file_name: self._resolve_lazy_value(file_name, dataset_name), 
+    #        return_dtype=pl.Object
+    #    )
+
+    def evaluate_lazy_column(self, df: pl.LazyFrame, dataset_name: str) -> pl.LazyFrame:
+        """Evaluate a specific lazy-loaded column in a Polars LazyFrame."""
+
+        # Ensure the 'filename' column exists in the LazyFrame
+        if 'filename' not in df.columns or dataset_name not in df.columns:
+            raise ValueError(f"Column 'filename' or '{dataset_name}' not found in LazyFrame.")
+
+        def resolve_and_load(file_names):
+            loaded_data = []
+            for file_name in file_names:
+                logging.debug(f"Processing file_name: {file_name} (type: {type(file_name)})")
+                
+                if callable(file_name):  # Check if it's a lambda function
+                    logging.warning(f"Skipping lambda function: {file_name}")
+                    continue  # Skip function references
+                
+                if isinstance(file_name, str):
+                    # Proceed to resolve the file path and load data
+                    data = self._resolve_lazy_value(file_name, dataset_name)
+                    loaded_data.append(data)
+                else:
+                    logging.warning(f"Skipping non-string file_name: {file_name}")
+            return loaded_data
+
+        # Apply map_batches to resolve paths and load data for each batch
+        return df.with_columns(
+            pl.col(dataset_name).map_batches(
+                resolve_and_load,
+                return_dtype=pl.Object  # Ensure proper output type
+            ).alias(dataset_name)  # Make sure the column gets the correct alias
+        )
+
+
+
 
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
@@ -608,31 +658,39 @@ class NeXusBatchProcessor(BaseProcessor):
 if __name__ == "__main__":
       
     def test_broken():
-    
-        #damaged=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
-        #damaged.process()
-        
-        from collections import defaultdict
-
-        
-                    
+        # Initialize the NeXusBatchProcessor with the broken folder path
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
-        damaged_folder.process_files()
-        res =damaged_folder.processed_files
         
-        #damaged_folder.compare_processed_files()
+        col_name = '/scan/apd/data'  # Name of the dataset you're evaluating
+
+        # Get the DataFrame with regular data (processed files)
+        df_damaged = damaged_folder.get_dataframe()
+        print("Regular DataFrame (df_damaged):")
+        print(df_damaged.head())
         
-        
-        df_damaged= damaged_folder.get_dataframe()
-        
-               
-        print(df_damaged.head())    
-        
-        df_damaged_lazy=damaged_folder.get_lazy_dataframe()
+        # Get the DataFrame with lazy-loaded data (evaluated columns)
+        df_damaged_lazy = damaged_folder.get_lazy_dataframe()
+        print("Lazy-loaded DataFrame (df_damaged_lazy):")
         print(df_damaged_lazy.head())
-        
+
+        # Optionally: inspect lazy-loaded columns evaluation results
+        # Iterate over the columns and evaluate if they contain lazy-loaded references
+        for column in df_damaged_lazy.columns:
+            if col_name in column:  # Evaluate only specific columns
+                try:
+                    df_resolved = damaged_folder.evaluate_lazy_column(df_damaged_lazy, col_name)
+                    print(f"Evaluated column '{col_name}':")
+                    print(df_resolved.collect().head())
+                    print(f"Evaluated column '{col_name}':")
+                    print(df_resolved.select(col_name).collect().head())  # Only show the evaluated column
+            
+                except Exception as e:
+                    print(f"Error evaluating column {column}: {e}")
+
+    # Run the test
     test_broken()
-        
+
+    
     def test_raw():
         file_path=Path("/Users/lotzegud/P08/11019623/raw")
         batch_proc=NeXusBatchProcessor(file_path)
