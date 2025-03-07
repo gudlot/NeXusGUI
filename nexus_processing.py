@@ -188,20 +188,20 @@ class NeXusProcessor:
         nx_entry.visititems_links(process_link)
 
 
-
     def _store_dataset(self, path: str, obj: h5py.Dataset):
         """Efficiently stores dataset values and unit information in data_dict."""
         try:
-            # Determine how to handle the dataset
+            # Handle string data types (Unicode or byte strings)
             if obj.dtype.kind in {"U", "S"}:  # Unicode or byte strings
                 raw_value = obj[()]
                 value = raw_value.decode() if isinstance(raw_value, bytes) else raw_value
-            elif obj.shape == () or obj.size == 1:  # Scalar datasets
-                value = obj[()]
-                # If the value is a numpy array with a single element, extract it
-                if isinstance(value, np.ndarray) and value.size == 1:
-                    value = value.item()  # Convert to a Python scalar (float, int, etc.)
-            elif obj.ndim == 1 or obj.ndim == 2 or obj.ndim == 3:  # Lazy-load 1D & 2D arrays
+            
+            # Handle scalar datasets (zero-dimensional arrays)
+            elif obj.ndim == 0:  # Scalar
+                value = obj[()]  # Extract scalar value
+            
+            # Handle arrays (1D, 2D, 3D, including single-element 1D arrays)
+            elif obj.ndim in {1, 2, 3}:  
                 file_path = str(self.file_path)  # Store file path
                 dataset_name = obj.name  # Store dataset path
 
@@ -211,22 +211,26 @@ class NeXusProcessor:
                         return pl.Series(dataset_name, f[dataset_name][:])
 
                 value = {"lazy": load_on_demand}  # Mark as lazy function
+            
             else:
                 logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
                 return  # Do not store unsupported datasets
             
-            # Store in data_dict
+            # Store value in data_dict
             self.data_dict[path] = {"value": value}
 
             # Handle unit attribute correctly
             unit = obj.attrs.get("unit", None)
-            if isinstance(unit, bytes):  # Ensure decoding if unit is stored as bytes
-                unit = unit.decode()
             if unit is not None:
+                # Check if the unit is stored as bytes, decode if necessary
+                if isinstance(unit, bytes):
+                    unit = unit.decode()
+                # No decoding needed for string units
                 self.data_dict[path]["unit"] = unit
-
+            
         except OSError as e:
             logging.error(f"Skipping dataset {path} in {self.file_path} due to broken external link: {e}")
+
 
     def _extract_scan_metadata(self, nx_entry: h5py.Group) -> dict:
         """Extracts scan metadata from a NeXus file and returns it as a dictionary."""
@@ -417,39 +421,70 @@ class NeXusBatchProcessor(BaseProcessor):
         
         return self._df.lazy().select(["filename", "scan_id", "scan_command", "human_start_time"])
 
-    def compare_processed_files(self):
-        """Check for type inconsistencies across processed files."""
-        key_types = defaultdict(set)  # Store encountered types for each key
-        print(f"Processed {len(self.processed_files)} files")
+    
 
+    def compare_processed_files(self):
+        key_types = defaultdict(lambda: defaultdict(set))  # Store encountered types for each key and the files they appeared in
+        key_shapes = defaultdict(lambda: defaultdict(set))  # Store encountered shapes for each key (for arrays)
+        key_units = defaultdict(lambda: defaultdict(set))  # Store encountered unit attributes for each key
+
+        print(f"Processed {len(self.processed_files)} files")
+        
         if not self.processed_files:
             print("No files found in processed_files.")
             return
 
-        for path, nested_dict in self.processed_files.items():  # Iterate over paths
+        # Iterate over each file and its associated nested dictionary
+        for path, nested_dict in self.processed_files.items():  
             print(f"Checking file: {path}")
+            
             if not nested_dict:
                 print(f"  Warning: File {path} has an empty dictionary.")
                 continue
-            for key, value in nested_dict.items():  # Iterate over the nested dictionary
-                key_types[key].add(type(value))
-                print(f"  {key}: {type(value)}")
 
+            # Iterate over the nested dictionary to collect types, shapes, and units for each key
+            for key, value in nested_dict.items():
+                # Handle np.ndarray values (they will be lazy-loaded)
+                if isinstance(value, np.ndarray):
+                    key_types[key][np.ndarray].add(path)
+                    key_shapes[key][value.shape].add(path)  # Track the shape for arrays
+
+                # Handle h5py dataset values
+                elif isinstance(value, h5py._hl.dataset.Dataset):
+                    try:
+                        unit = value.attrs.get("unit")
+                        if unit:
+                            key_units[key]["unit"].add(unit)
+                        key_types[key][type(value)].add(path)
+                    except Exception as e:
+                        print(f"  Warning: Failed to access 'unit' attribute for key '{key}' in {path}: {e}")
+                        key_types[key][type(value)].add(path)
+
+                # Handle other types
+                else:
+                    key_types[key][type(value)].add(path)
+
+        # Summary of inconsistencies
         print("\nSummary of inconsistencies:")
         found_inconsistencies = False
         for key, types in key_types.items():
-            if len(types) > 1:
-                print(f"  Inconsistent types for key '{key}': {types}")
+            if len(types) > 1:  # More than one type for a key means inconsistency
                 found_inconsistencies = True
+                print(f"  Inconsistent types for key '{key}':")
+                for value_type, paths in types.items():
+                    print(f"    Type {value_type} found in files: {', '.join(paths)}")
+
+                    # Check for unit inconsistencies only if units exist for the key
+                    if key in key_units and len(key_units[key]) > 1:
+                        print(f"    - Units: {', '.join(key_units[key]['unit'])} are inconsistent across files")
+
+                    # Check for shape inconsistencies
+                    if key in key_shapes and len(key_shapes[key]) > 1:
+                        print(f"    - Shapes: {', '.join(str(shape) for shape in key_shapes[key])} are inconsistent across files")
+
         if not found_inconsistencies:
             print("  No type inconsistencies found.")
 
-        print("\nAll keys found across files:")
-        if key_types:
-            for key in key_types:
-                print(f"  {key}")
-        else:
-            print("  No keys found in any file.")
 
 
 
@@ -579,44 +614,13 @@ if __name__ == "__main__":
         
         from collections import defaultdict
 
-        def compare_nested_dicts(processed_files: dict):
-            key_types = defaultdict(set)  # Store encountered types for each key
-            print(f"Processed {len(processed_files)} files")
-            
-            if not processed_files:
-                print("No files found in processed_files.")
-                return
-            
-            for path, nested_dict in processed_files.items():  # Iterate over paths
-                print(f"Checking file: {path}")
-                if not nested_dict:
-                    print(f"  Warning: File {path} has an empty dictionary.")
-                    continue
-                for key, value in nested_dict.items():  # Iterate over the nested dictionary
-                    key_types[key].add(type(value))
-                    print(f"  {key}: {type(value)}")
-            
-            print("\nSummary of inconsistencies:")
-            found_inconsistencies = False
-            for key, types in key_types.items():
-                if len(types) > 1:
-                    print(f"  Inconsistent types for key '{key}': {types}")
-                    found_inconsistencies = True
-            if not found_inconsistencies:
-                print("  No type inconsistencies found.")
-            
-            print("\nAll keys found across files:")
-            if key_types:
-                for key in key_types:
-                    print(f"  {key}")
-            else:
-                print("  No keys found in any file.")
+        
                     
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
         damaged_folder.process_files()
         res =damaged_folder.processed_files
         
-        compare_nested_dicts(res)
+        #damaged_folder.compare_processed_files()
         
         
         df_damaged= damaged_folder.get_dataframe()
