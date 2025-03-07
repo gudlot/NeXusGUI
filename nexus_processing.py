@@ -6,7 +6,7 @@ import logging
 from functools import lru_cache
 from typing import Optional, Tuple, Dict, Any
 from base_processing import BaseProcessor
-
+from collections import defaultdict
 
 # Configure the logger
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
@@ -192,12 +192,15 @@ class NeXusProcessor:
     def _store_dataset(self, path: str, obj: h5py.Dataset):
         """Efficiently stores dataset values and unit information in data_dict."""
         try:
-                # Determine how to handle the dataset
+            # Determine how to handle the dataset
             if obj.dtype.kind in {"U", "S"}:  # Unicode or byte strings
                 raw_value = obj[()]
                 value = raw_value.decode() if isinstance(raw_value, bytes) else raw_value
             elif obj.shape == () or obj.size == 1:  # Scalar datasets
                 value = obj[()]
+                # If the value is a numpy array with a single element, extract it
+                if isinstance(value, np.ndarray) and value.size == 1:
+                    value = value.item()  # Convert to a Python scalar (float, int, etc.)
             elif obj.ndim == 1 or obj.ndim == 2 or obj.ndim == 3:  # Lazy-load 1D & 2D arrays
                 file_path = str(self.file_path)  # Store file path
                 dataset_name = obj.name  # Store dataset path
@@ -208,7 +211,6 @@ class NeXusProcessor:
                         return pl.Series(dataset_name, f[dataset_name][:])
 
                 value = {"lazy": load_on_demand}  # Mark as lazy function
-
             else:
                 logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
                 return  # Do not store unsupported datasets
@@ -225,8 +227,6 @@ class NeXusProcessor:
 
         except OSError as e:
             logging.error(f"Skipping dataset {path} in {self.file_path} due to broken external link: {e}")
-
-
 
     def _extract_scan_metadata(self, nx_entry: h5py.Group) -> dict:
         """Extracts scan metadata from a NeXus file and returns it as a dictionary."""
@@ -401,6 +401,8 @@ class NeXusBatchProcessor(BaseProcessor):
             self.structure_list.append({"file": str_path, "structure": processor.structure_dict})
 
         logging.info(f"Processed {len(self.processed_files)} NeXus files.")
+        self.compare_processed_files()
+                
         
         # Store lazy references and soft links properly in `_df`**
         if self.processed_files:
@@ -415,52 +417,110 @@ class NeXusBatchProcessor(BaseProcessor):
         
         return self._df.lazy().select(["filename", "scan_id", "scan_command", "human_start_time"])
 
+    def compare_processed_files(self):
+        """Check for type inconsistencies across processed files."""
+        key_types = defaultdict(set)  # Store encountered types for each key
+        print(f"Processed {len(self.processed_files)} files")
 
-    def _resolve_lazy_value(self, value):
-        """Helper function to resolve lazy datasets and handle soft links.
+        if not self.processed_files:
+            print("No files found in processed_files.")
+            return
 
-        - If `value` is a dict containing `"lazy"`, it evaluates the dataset.
-        - If `value` is a dict containing `"source"`, it keeps the reference.
-        - Otherwise, returns the value as-is.
+        for path, nested_dict in self.processed_files.items():  # Iterate over paths
+            print(f"Checking file: {path}")
+            if not nested_dict:
+                print(f"  Warning: File {path} has an empty dictionary.")
+                continue
+            for key, value in nested_dict.items():  # Iterate over the nested dictionary
+                key_types[key].add(type(value))
+                print(f"  {key}: {type(value)}")
+
+        print("\nSummary of inconsistencies:")
+        found_inconsistencies = False
+        for key, types in key_types.items():
+            if len(types) > 1:
+                print(f"  Inconsistent types for key '{key}': {types}")
+                found_inconsistencies = True
+        if not found_inconsistencies:
+            print("  No type inconsistencies found.")
+
+        print("\nAll keys found across files:")
+        if key_types:
+            for key in key_types:
+                print(f"  {key}")
+        else:
+            print("  No keys found in any file.")
+
+
+
+    def resolve_value(value, key: str):
+        """Ensure values are either resolved or stored as references.
+        
+        Raises:
+            ValueError: If an inconsistency is detected (e.g., mixed types).
         """
         if isinstance(value, dict):
             if "lazy" in value:
-                try:
-                    return value["lazy"]()  # Evaluate dataset
-                except Exception as e:
-                    logging.warning(f"Failed to resolve lazy dataset: {e}")
-                    return None  # Return None to avoid crashes
+                # Handle lazy datasets
+                if resolve:
+                    try:
+                        return value["lazy"]()  # Evaluate dataset
+                    except Exception as e:
+                        logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
+                        return None  # Return None for broken datasets
+                else:
+                    return value["lazy"]  # Return the lazy function itself
             if "source" in value:
-                return f"Reference: {value['source']}"  # Keep soft link as reference
-
-        return value  # Return direct values
+                return value["source"]  # Keep soft link as a reference
+        # Check for inconsistent types
+        if not isinstance(value, (float, int, str, type(None))):  # Add other allowed types as needed
+            raise ValueError(
+                f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
+            )
+        return value  # Return normal values
 
 
     def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
-        """Constructs a Polars DataFrame from processed files.
-        
-        - If `resolve` is True, it evaluates lazy-loaded datasets.
-        - If `resolve` is False, it keeps lazy references.
-        """
-        def resolve_value(value):
-            """Ensure values are either resolved or stored as references."""
+        """Constructs a Polars DataFrame from processed files."""
+        def resolve_value(value, key: str):
+            """Ensure values are either resolved or stored as references.
+            
+            Raises:
+                ValueError: If an inconsistency is detected (e.g., mixed types).
+            """
             if isinstance(value, dict):
-                if "lazy" in value and resolve:
-                    return value["lazy"]()  # Evaluate dataset
-                elif "lazy" in value:
-                    return value["lazy"]  # Return the lazy function itself
+                if "lazy" in value:
+                    # Handle lazy datasets
+                    if resolve:
+                        try:
+                            return value["lazy"]()  # Evaluate dataset
+                        except Exception as e:
+                            logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
+                            return None  # Return None for broken datasets
+                    else:
+                        return value["lazy"]  # Return the lazy function itself
                 if "source" in value:
                     return value["source"]  # Keep soft link as a reference
+            # Check for inconsistent types
+            if not isinstance(value, (float, int, str, type(None))):  # Add other allowed types as needed
+                raise ValueError(
+                    f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
+                )
             return value  # Return normal values
-        
-        # Debug: Print the structure of processed files
-        for file_data in self.processed_files.values():
-            print("File Data:", file_data)
 
-        return pl.DataFrame([
-            {k: resolve_value(v) for k, v in file_data.items()}
-            for file_data in self.processed_files.values()
-        ])
+        # Debug: Print the structure of processed files
+        #for file_data in self.processed_files.values():
+        #    print("File Data:", file_data)
+
+        # Build the DataFrame
+        try:
+            return pl.DataFrame([
+                {k: resolve_value(v, k) for k, v in file_data.items()}
+                for file_data in self.processed_files.values()
+            ])
+        except ValueError as e:
+            logging.error(f"Error building DataFrame: {e}")
+            raise  # Re-raise the error for further debugging
 
 
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
@@ -517,8 +577,48 @@ if __name__ == "__main__":
         #damaged=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
         #damaged.process()
         
+        from collections import defaultdict
+
+        def compare_nested_dicts(processed_files: dict):
+            key_types = defaultdict(set)  # Store encountered types for each key
+            print(f"Processed {len(processed_files)} files")
             
+            if not processed_files:
+                print("No files found in processed_files.")
+                return
+            
+            for path, nested_dict in processed_files.items():  # Iterate over paths
+                print(f"Checking file: {path}")
+                if not nested_dict:
+                    print(f"  Warning: File {path} has an empty dictionary.")
+                    continue
+                for key, value in nested_dict.items():  # Iterate over the nested dictionary
+                    key_types[key].add(type(value))
+                    print(f"  {key}: {type(value)}")
+            
+            print("\nSummary of inconsistencies:")
+            found_inconsistencies = False
+            for key, types in key_types.items():
+                if len(types) > 1:
+                    print(f"  Inconsistent types for key '{key}': {types}")
+                    found_inconsistencies = True
+            if not found_inconsistencies:
+                print("  No type inconsistencies found.")
+            
+            print("\nAll keys found across files:")
+            if key_types:
+                for key in key_types:
+                    print(f"  {key}")
+            else:
+                print("  No keys found in any file.")
+                    
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
+        damaged_folder.process_files()
+        res =damaged_folder.processed_files
+        
+        compare_nested_dicts(res)
+        
+        
         df_damaged= damaged_folder.get_dataframe()
         
                
