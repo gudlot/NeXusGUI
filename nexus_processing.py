@@ -345,7 +345,7 @@ class NeXusBatchProcessor(BaseProcessor):
         self.nxs_files = list(self.directory.glob("*.nxs"))  # Keep a fixed order
         self.processed_files = {}  # Stores processed data for each file (path -> data)
         self.structure_list = []  # Stores file structure metadata
-        self._df = None  # Cached DataFrame
+        self._df = None  # Cached DataFrame, is eager
         logging.info(f"Found {len(self.nxs_files)} NeXus files.")
 
     def update_files(self):
@@ -385,8 +385,7 @@ class NeXusBatchProcessor(BaseProcessor):
 
             processor = NeXusProcessor(str_path)
             file_data = processor.process()
-
-
+        
             if not file_data:
                 logging.warning(f"Skipping {str_path} due to broken external links or missing data.")
                 continue  
@@ -453,6 +452,10 @@ class NeXusBatchProcessor(BaseProcessor):
                 if "source" in value:
                     return value["source"]  # Keep soft link as a reference
             return value  # Return normal values
+        
+        # Debug: Print the structure of processed files
+        for file_data in self.processed_files.values():
+            print("File Data:", file_data)
 
         return pl.DataFrame([
             {k: resolve_value(v) for k, v in file_data.items()}
@@ -474,7 +477,16 @@ class NeXusBatchProcessor(BaseProcessor):
 
 
     def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
-        """Return the processed data as a lazy-loaded Polars DataFrame."""
+        """Return the processed data as a lazy-loaded Polars DataFrame.
+        lazy_df = processor.get_lazy_dataframe()
+
+        # Access a lazy column (e.g., "/scan/data")
+        lazy_column = lazy_df["/scan/data"]
+
+        # Evaluate the lazy column when needed
+        evaluated_data = lazy_column.map_elements(lambda x: x() if callable(x) else x)
+                
+        """
         self.process_files(force_reload)
         
         if self._df is None:
@@ -502,8 +514,8 @@ if __name__ == "__main__":
       
     def test_broken():
     
-        damaged=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
-        damaged.process()
+        #damaged=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
+        #damaged.process()
         
             
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
@@ -524,7 +536,7 @@ if __name__ == "__main__":
         
     
     
-    def test_health():
+    def test_healthy():
         file_path = Path("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02349.nxs")
         print(f"File exists: {file_path.exists()}")
         print(f"Absolute path: {file_path.resolve()}")
@@ -582,9 +594,7 @@ if __name__ == "__main__":
         
         
         print(75*"\N{hot pepper}")
-
-
-    
+  
         
         print(75*"\N{blueberries} ")
         
@@ -606,3 +616,5 @@ if __name__ == "__main__":
         hdf5_path = df["/scan/apd/data"][0]  # Get the path from the first row of the column
 
         print("HDF5 path:", hdf5_path)  # Print the HDF5 path
+        
+   #test_healthy()
