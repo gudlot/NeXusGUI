@@ -7,17 +7,27 @@ from functools import lru_cache
 from typing import Optional, Tuple, Dict, Any
 from base_processing import BaseProcessor
 from collections import defaultdict
+from dataclasses import dataclass
 
 # Configure the logger
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)  # Define the logger instance
 
 
-def load_on_demand(directory: Path, file_name: str, dataset_name: str) -> pl.Series:
-    """Reopen file and load dataset when needed, using the directory to resolve the full path."""
-    file_path = directory / file_name  # Combine the directory and the relative file name
-    with h5py.File(file_path, "r") as f:
-        return pl.Series(dataset_name, f[dataset_name][:])
+
+@dataclass
+class LazyDatasetReference:
+    directory: Path
+    file_name: str
+    dataset_name: str
+
+    def load_on_demand(directory: Path, file_name: str, dataset_name: str) -> pl.Series:
+        """Reopen file and load dataset when needed, using the directory to resolve the full path."""
+        file_path = directory / file_name  # Combine the directory and the relative file name
+        with h5py.File(file_path, "r") as f:
+            return pl.Series(dataset_name, f[dataset_name][:])
+
+
 
 class NeXusProcessor:
     def __init__(self, file_path: str):
