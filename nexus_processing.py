@@ -449,7 +449,7 @@ class NeXusBatchProcessor(BaseProcessor):
                 if "lazy" in value and resolve:
                     return value["lazy"]()  # Evaluate dataset
                 elif "lazy" in value:
-                    return "<Lazy Dataset>"  # Placeholder for lazy references
+                    return value["lazy"]  # Return the lazy function itself
                 if "source" in value:
                     return value["source"]  # Keep soft link as a reference
             return value  # Return normal values
@@ -502,16 +502,18 @@ if __name__ == "__main__":
       
     def test_broken():
     
-        broken=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
-        broken.process()
+        damaged=NeXusProcessor("/Users/lotzegud/P08/broken/h2o_2024_10_16_01116.nxs")
+        damaged.process()
         
             
-        broken_data = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
-        df_broken= broken_data.get_dataframe()
+        damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
+        df_damaged= damaged_folder.get_dataframe()
         
-        print(df_broken.head())    
+               
+        print(df_damaged.head())    
         
-        
+        df_damaged_lazy=damaged_folder.get_lazy_dataframe()
+        print(df_damaged_lazy.head())
         
     test_broken()
         
