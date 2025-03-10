@@ -535,27 +535,6 @@ class NeXusBatchProcessor(BaseProcessor):
 
 
 
-    def resolve_value(value, key: str):
-        """Ensure values are either resolved or stored as references.
-        
-        Raises:
-            ValueError: If an inconsistency is detected (e.g., mixed types).
-        """
-        if isinstance(value, dict):
-            if "lazy" in value:
-                # Handle lazy datasets
-                if resolve:
-                    try:
-                        return value["lazy"]()  # Evaluate dataset
-                    except Exception as e:
-                        logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
-                        return None  # Return None for broken datasets
-                else:
-                    return value["lazy"]  # Return the lazy function itself
-            if "source" in value:
-                return value["source"]  # Keep soft link as a reference
-        
-        return value  # Return normal values
 
 
     def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
