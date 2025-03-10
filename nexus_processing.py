@@ -533,10 +533,6 @@ class NeXusBatchProcessor(BaseProcessor):
 
 
 
-
-
-
-
     def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
         """Constructs a Polars DataFrame from processed files."""
 
@@ -602,22 +598,15 @@ class NeXusBatchProcessor(BaseProcessor):
 
 
     def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
-        """Return the processed data as a lazy-loaded Polars DataFrame.
-        lazy_df = processor.get_lazy_dataframe()
+        """Return the processed data as a lazy-loaded Polars DataFrame."""
 
-        # Access a lazy column (e.g., "/scan/data")
-        lazy_column = lazy_df["/scan/data"]
-
-        # Evaluate the lazy column when needed
-        evaluated_data = lazy_column.map_elements(lambda x: x() if callable(x) else x)
-                
-        """
         self.process_files(force_reload)
         
+        # Ensure _df is populated without resolving dataset references
         if self._df is None:
-            raise ValueError("No processed data available.")
-        
-        return self._df.lazy()
+            self._df = self._build_dataframe(resolve=False)  # Keep LazyDatasetReference
+
+        return self._df.lazy()  # Convert to LazyFrame for deferred execution
 
 
     @staticmethod
