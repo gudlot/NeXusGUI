@@ -22,12 +22,21 @@ class LazyDatasetReference:
     file_name: str
     dataset_name: str
 
-    def load_on_demand(self) -> pl.Series:
-        """Reopen file and load dataset when needed, using the directory to resolve the full path."""
-        file_path = self.directory / self.file_name  # Combine the directory and the relative file name
+    def load_on_demand(self):
+        """Load dataset from HDF5 file lazily."""
+        file_path = self.directory / self.file_name
         with h5py.File(file_path, "r") as f:
             data = f[self.dataset_name][:]
-            return pl.Series(self.dataset_name, data)
+            if data.size == 0:
+                return None  # Missing values should be None
+
+            if data.ndim == 1:
+                return data.tolist()  # Will be stored as pl.List(pl.Float64)
+            elif data.ndim == 2:
+                return data  # Will be stored as pl.Array(shape, pl.Float64)
+            else:
+                raise ValueError(f"Unexpected shape {data.shape} in dataset {self.dataset_name}")
+
 
 
 class NeXusProcessor:
@@ -706,17 +715,36 @@ if __name__ == "__main__":
         
         col_name = "/scan/apd/data"  # Column where LazyDatasetReference instances are stored
   
+        def infer_dtype(df: pl.DataFrame, col: str):
+            # Drop null values before filtering (avoids unnecessary processing)
+            non_null_refs = df[col].drop_nulls()
+
+            # Find the first valid dataset without iterating over all rows
+            for ref in non_null_refs:
+                if isinstance(ref, LazyDatasetReference):
+                    data = ref.load_on_demand()
+                    if data is not None:
+                        if isinstance(data, list):  # Check if it's a 1D list
+                            return pl.List(pl.Float64)
+                        elif isinstance(data, np.ndarray):  # Check if it's a 2D numpy array
+                            return pl.Array(data.shape, pl.Float64)
+
+            return pl.List(pl.Float64)  # Default to 1D if no valid data found
+
+        # Step 2: Determine return dtype lazily
+        return_dtype = infer_dtype(df_damaged, col_name)
+
+        # Step 3: Apply transformation using determined dtype
         df_resolved = df_damaged.with_columns(
             pl.col(col_name).map_elements(
                 lambda ref: ref.load_on_demand() if isinstance(ref, LazyDatasetReference) else None,
-                return_dtype=pl.Object  # Ensure proper dtype is returned
+                return_dtype=return_dtype
             )
         )
 
-
         # Print the final DataFrame with loaded data
         print(df_resolved)
-        
+                
         print(30*"\N{pineapple}")
         
         # Get the DataFrame with lazy-loaded data (evaluated columns)
