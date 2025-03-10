@@ -696,48 +696,26 @@ if __name__ == "__main__":
         # Initialize the NeXusBatchProcessor with the broken folder path
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
         
-        col_name = '/scan/apd/data'  # Name of the dataset you're evaluating
-
+        
         # Get the DataFrame with regular data (processed files)
         df_damaged = damaged_folder.get_dataframe()
         print("Regular DataFrame (df_damaged):")
         print(df_damaged.head())
         
         print(30*"\N{pineapple}")
-        col_name="/scan/apd/data"
-        test=df_damaged.select([col_name])
         
-        print(test)
-        
-        # Function to parallelize the loading of datasets
-        def load_in_parallel(refs):
-            """Load datasets in parallel using ThreadPoolExecutor."""
-            with ThreadPoolExecutor() as executor:
-                # Execute lazy loading without flattening the references
-                return list(executor.map(lambda ref: ref.load_on_demand()(), refs))
-        
-        
-        #df_resolved = df_damaged.with_columns(
-        #    pl.col(col_name).map_elements(
-        #        lambda ref: LazyDatasetReference.load_on_demand(ref.directory, ref.file_name, ref.dataset_name) 
-        #        if isinstance(ref, LazyDatasetReference) else None
-        #    )
-        #)
-        
-        # Use map_batches to invoke load_on_demand without flattening
+        col_name = "/scan/apd/data"  # Column where LazyDatasetReference instances are stored
+  
         df_resolved = df_damaged.with_columns(
-            pl.col(col_name).map_batches(
-                lambda batch: load_in_parallel(batch),  # Load datasets in parallel
-                return_dtype=pl.Object
+            pl.col(col_name).map_elements(
+                lambda ref: ref.load_on_demand() if isinstance(ref, LazyDatasetReference) else None,
+                return_dtype=pl.Object  # Ensure proper dtype is returned
             )
         )
 
-        # Collect the DataFrame to trigger actual computation
-        df_final = df_resolved.collect()
-        
-        
+
+        # Print the final DataFrame with loaded data
         print(df_resolved)
-        
         
         print(30*"\N{pineapple}")
         
@@ -746,21 +724,7 @@ if __name__ == "__main__":
         print("\N{rainbow}\N{rainbow}\N{rainbow} Lazy-loaded DataFrame (df_damaged_lazy):")
         print(df_damaged_lazy.head())
 
-        # Evaluate the lazy-loaded column
-        try:
-            df_resolved = damaged_folder.evaluate_lazy_column(df_damaged_lazy, col_name)
-            
-            # Print the resolved data (evaluated column)
-            print(f"Evaluated column '{col_name}':")
-            print(df_resolved.collect().head())  # Collect and print the first few rows of the resolved column
-
-            # Alternatively, if you want to print only the evaluated column:
-            print(f"Evaluated column '{col_name}' (only the resolved column):")
-            print(df_resolved.select(col_name).collect().head())  # Only show the evaluated column
-        
-        except Exception as e:
-            print(f"Error evaluating column '{col_name}': {e}")
-
+       
     # Run the test
     test_broken()
 
