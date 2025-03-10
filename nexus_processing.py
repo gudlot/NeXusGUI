@@ -14,8 +14,6 @@ from concurrent.futures import ThreadPoolExecutor
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)  # Define the logger instance
 
-
-
 @dataclass
 class LazyDatasetReference:
     directory: Path
@@ -27,13 +25,23 @@ class LazyDatasetReference:
         file_path = self.directory / self.file_name
         with h5py.File(file_path, "r") as f:
             data = f[self.dataset_name][:]
+            
+            # Check for empty data (0 elements)
             if data.size == 0:
-                return None  # Missing values should be None
-
+                return None  # Missing or empty data
+            
             if data.ndim == 1:
+                if data.size == 0:
+                    #logger.debug(f"{self.file_name} has no values")
+                    return None  # Empty 1D array should return None
                 return data.tolist()  # Will be stored as pl.List(pl.Float64)
+
             elif data.ndim == 2:
+                # Handle empty 2D arrays with zero elements
+                if data.shape[0] == 0 or data.shape[1] == 0:
+                    return None  # 2D array with 0 rows or 0 columns is treated as None
                 return data  # Will be stored as pl.Array(shape, pl.Float64)
+
             else:
                 raise ValueError(f"Unexpected shape {data.shape} in dataset {self.dataset_name}")
 
@@ -552,51 +560,42 @@ class NeXusBatchProcessor(BaseProcessor):
 
     def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
         """Constructs a Polars DataFrame from processed files."""
-        
+
         def resolve_value(value, key: str):
             """Ensure values are either resolved or stored as references.
-            
+
             Raises:
                 ValueError: If an inconsistency is detected (e.g., mixed types).
             """
-            # Handle LazyDatasetReference
-            if isinstance(value, LazyDatasetReference):
-                if resolve:
-                    try:
-                        # Attempt to resolve the LazyDatasetReference by loading data
-                        return value()  # This should resolve the data from the reference
-                    except Exception as e:
-                        logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
-                        return None  # Return None if resolution fails
-                else:
-                    # Return the LazyDatasetReference object as is when not resolving
-                    return value
-
             # Handle lazy dataset dictionary structure
             if isinstance(value, dict):
-                if "lazy" in value:
+                if "lazy" in value:  # Expect LazyDatasetReference here
+                    lazy_ref = value["lazy"]
                     if resolve:
                         try:
-                            return value["lazy"]()  # Resolve the lazy dataset
+                            if isinstance(lazy_ref, LazyDatasetReference):
+                                return lazy_ref.load_on_demand()  # Resolve the reference
+                            elif callable(lazy_ref):
+                                return lazy_ref()  # If it's a function, call it
+                            else:
+                                return lazy_ref  # Return as-is if it's neither a function nor a LazyDatasetReference
                         except Exception as e:
                             logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
                             return None  # Return None if resolution fails
                     else:
-                        return value["lazy"]  # Return the lazy function reference itself
+                        return lazy_ref  # Return LazyDatasetReference without resolving
+
                 if "source" in value:
-                    return value["source"]  # Return the source reference
+                    return value["source"]  # Return the source reference directly
 
-            # Check for inconsistent types (other values)
-            if not isinstance(value, (float, int, str, type(None))):  # Add other allowed types if necessary
-                raise ValueError(
-                    f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
-                )
+            # Handle normal key-value pairs (expected types: float, int, str, None)
+            if isinstance(value, (float, int, str, type(None))):
+                return value
             
-            return value  # Return normal values (non-lazy datasets)
-
-        # Debug: Print the structure of processed files (if needed)
-        # for file_data in self.processed_files.values():
-        #     print("File Data:", file_data)
+            # Unexpected type → Raise error
+            raise ValueError(
+                f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
+            )
 
         # Build the DataFrame from processed files
         try:
@@ -607,6 +606,7 @@ class NeXusBatchProcessor(BaseProcessor):
         except ValueError as e:
             logging.error(f"Error building DataFrame: {e}")
             raise  # Re-raise the error for further debugging
+
 
 
 
@@ -640,55 +640,131 @@ class NeXusBatchProcessor(BaseProcessor):
         
         return self._df.lazy()
 
+
+    @staticmethod
+    def infer_dtype(df: pl.DataFrame | pl.LazyFrame, col: str):
+        """Infer the appropriate Polars dtype based on the first valid dataset reference."""
+        
+        def resolve_dtype(dataset_ref):
+            """Determine dtype from a single dataset reference."""
+            if isinstance(dataset_ref, LazyDatasetReference):
+                data = dataset_ref.load_on_demand()
+                if data is None:
+                    return None  # Skip None values
+                
+                if isinstance(data, list):
+                    return pl.List(pl.Float64)  # 1D case
+                
+                if isinstance(data, np.ndarray):
+                    return pl.Array(pl.Float64, data.shape)  # 2D case
+
+            return None  # Default fallback (previously pl.Object)
+
+        if isinstance(df, pl.DataFrame):
+            # Iterate over column values and return the first detected dtype (ignoring None)
+            for ref in df[col]:
+                dtype = resolve_dtype(ref)
+                if dtype is not None:  # Skip None values
+                    return dtype
+
+            return pl.Object  # Fallback if no valid type was found
+
+        elif isinstance(df, pl.LazyFrame):
+            # Process lazily: select first valid non-null row and infer dtype
+            sample_dtype = (
+                df.select(pl.col(col))
+                .drop_nulls()  # Ensure non-null values
+                .limit(10)  # Take up to 10 rows to avoid stopping at a None entry
+                .select(pl.col(col).map_elements(resolve_dtype, return_dtype=pl.Object))
+                .collect()
+            )
+
+            # Extract the first valid dtype
+            dtypes = [dtype for dtype in sample_dtype.to_series(0) if dtype is not None]
+            return dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
+
+        else:
+            raise TypeError("df must be a Polars DataFrame or LazyFrame")
+
+
+    def resolve_lazy_references_eagerly(self, df: pl.DataFrame, col_name: str) -> pl.DataFrame:
+        """Resolve the LazyDatasetReference objects eagerly in a given column of a DataFrame."""
+        
+        # Step 1: Infer the correct return dtype for the column
+        infer_dtype_val = self.infer_dtype(df, col_name)
+        
+        print(f"Inferred dtype: { infer_dtype_val}")
+        
+        # Step 2: Apply transformation to resolve LazyDatasetReferences eagerly
+        df_resolved = df.with_columns(
+            pl.col(col_name).map_elements(
+                lambda ref: ref.load_on_demand() if isinstance(ref, LazyDatasetReference) else None,
+                return_dtype= infer_dtype_val
+            ).alias(col_name)  # Update the column with resolved data
+        )
+        
+        # Return the DataFrame with the resolved column
+        return df_resolved
+
+
     
-    def evaluate_lazy_column(self, df: pl.LazyFrame, dataset_name: str) -> pl.LazyFrame:
-        """Evaluate a specific lazy-loaded column in a Polars LazyFrame containing LazyDatasetReference objects."""
+    def resolve_lazy_column(self, df: pl.LazyFrame, dataset_name: str) -> pl.LazyFrame:
+        """Evaluate a specific lazy-loaded column in a Polars LazyFrame, 
+        resolving LazyDatasetReference objects or other lazy-loaded columns."""
         
         # Ensure the required columns are in the LazyFrame
         if 'filename' not in df.collect_schema().names() or dataset_name not in df.collect_schema().names():
             raise ValueError(f"Column 'filename' or '{dataset_name}' not found in LazyFrame.")
 
-        def resolve_and_load(row):
-            """Helper function to resolve and load data based on LazyDatasetReference."""
-            # Extract the LazyDatasetReference from the dataset_name column
-            dataset_ref = row[dataset_name]  # This should be a LazyDatasetReference instance
-            logger.debug(f"\N{rainbow}\N{rainbow}\N{hot pepper} Type of dataset_ref {dataset_ref}")
+        def resolve_and_load(dataset_ref):
+            """Helper function to resolve and load different types of lazy-loaded data."""
+            logger.debug(f"Type of dataset_ref: {dataset_ref}")
 
             # Handle None or null values in the dataset column
             if dataset_ref is None:  # This is equivalent to null in Polars
                 return None
 
-            # Handle values that start with '/' (likely paths, not LazyDatasetReference)
+            # Handle LazyDatasetReference: return the reference itself (deferred resolution)
+            if isinstance(dataset_ref, LazyDatasetReference):
+                logger.debug(f"Storing LazyDatasetReference for {dataset_ref}")
+                return dataset_ref.load_on_demand() 
+            
+            # Handle LazyFrame: evaluate lazily by collecting the data from LazyFrame
+            if isinstance(dataset_ref, pl.LazyFrame):
+                logger.debug(f"Resolving LazyFrame for column '{dataset_name}'")
+                return dataset_ref.collect()  # Collecting a LazyFrame to turn it into an eager DataFrame
+
+            # Handle other potential lazy objects (custom logic for specific types)
+            if isinstance(dataset_ref, pl.LazyList):
+                logger.debug(f"Resolving LazyList for column '{dataset_name}'")
+                return dataset_ref.collect()  # Convert LazyList to a regular list
+
+            # If it's a path, just return the path value (assuming string type)
             if isinstance(dataset_ref, str) and dataset_ref.startswith('/'):
                 logging.debug(f"Skipping path value in column '{dataset_name}': {dataset_ref}")
                 return dataset_ref  # Keep path as is
+            
+            # Handle unexpected types
+            logging.warning(f"Unexpected value in column '{dataset_name}': {dataset_ref}")
+            return None  # Ensure unknown types return None    
 
-            # Ensure the dataset_ref is a LazyDatasetReference object
-            if isinstance(dataset_ref, LazyDatasetReference):
-                logging.debug(f"Resolving LazyDatasetReference for {dataset_ref}")
-                # Use the information from LazyDatasetReference to load the data
-                data = self._resolve_lazy_value(dataset_ref.file_name, dataset_ref.dataset_name)
-                return data
-            else:
-                logging.warning(f"Row doesn't contain a LazyDatasetReference for dataset '{dataset_name}'")
-                return None  # Return None if the LazyDatasetReference is not present
 
-        # Apply row-wise operation across the LazyFrame using map_batches
+        # Infer the correct return dtype for the column after transformation
+        infer_dtype_val = self.infer_dtype(df, dataset_name)
+        print('Type in infer_dtype_val of resolve_lazy_column ',infer_dtype_val )
+        
+        # Apply transformation lazily using map_batches to resolve the references or lazy objects
         df_with_resolved_column = df.with_columns(
             pl.col(dataset_name).map_batches(
-                lambda batch: [resolve_and_load(row) for row in batch],
-                return_dtype=pl.Object  # Ensure the correct output type
-            ).alias(dataset_name)  # Retain the original column name
+                lambda batch: pl.Series([resolve_and_load(ref) for ref in batch]),  # Wrap in pl.Series
+                return_dtype=infer_dtype_val  
+            ).alias(dataset_name)
         )
 
-        logger.debug("LazyFrame is being evaluated...")
 
-        # Collect to trigger the evaluation of the LazyFrame
-        df_resolved = df_with_resolved_column.collect()
+        logger.debug("Lazy evaluation set up.")
         
-        logger.debug("Evaluation complete.")
-        
-        return df_resolved
+        return df_with_resolved_column  # Returns a LazyFrame, NOT collected
 
 
 
@@ -713,44 +789,38 @@ if __name__ == "__main__":
         
         print(30*"\N{pineapple}")
         
-        col_name = "/scan/apd/data"  # Column where LazyDatasetReference instances are stored
-  
-        def infer_dtype(df: pl.DataFrame, col: str):
-            # Drop null values before filtering (avoids unnecessary processing)
-            non_null_refs = df[col].drop_nulls()
+        col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
+        col_name = '/scan/apd/data'
+        
+        df_resolved= damaged_folder.resolve_lazy_references_eagerly(df_damaged, col_name)
 
-            # Find the first valid dataset without iterating over all rows
-            for ref in non_null_refs:
-                if isinstance(ref, LazyDatasetReference):
-                    data = ref.load_on_demand()
-                    if data is not None:
-                        if isinstance(data, list):  # Check if it's a 1D list
-                            return pl.List(pl.Float64)
-                        elif isinstance(data, np.ndarray):  # Check if it's a 2D numpy array
-                            return pl.Array(data.shape, pl.Float64)
+        # After applying the transformation, inspect the first row
+        print(df_resolved.head())
 
-            return pl.List(pl.Float64)  # Default to 1D if no valid data found
-
-        # Step 2: Determine return dtype lazily
-        return_dtype = infer_dtype(df_damaged, col_name)
-
-        # Step 3: Apply transformation using determined dtype
-        df_resolved = df_damaged.with_columns(
-            pl.col(col_name).map_elements(
-                lambda ref: ref.load_on_demand() if isinstance(ref, LazyDatasetReference) else None,
-                return_dtype=return_dtype
-            )
-        )
-
-        # Print the final DataFrame with loaded data
-        print(df_resolved)
                 
         print(30*"\N{pineapple}")
         
         # Get the DataFrame with lazy-loaded data (evaluated columns)
         df_damaged_lazy = damaged_folder.get_lazy_dataframe()
         print("\N{rainbow}\N{rainbow}\N{rainbow} Lazy-loaded DataFrame (df_damaged_lazy):")
+        
+        print(3*"\N{hot pepper}", type(df_damaged_lazy) )
         print(df_damaged_lazy.head())
+        print(df_damaged_lazy.select(col_name).collect())
+        
+        print("\N{banana}\N{banana}\N{banana}")
+        
+        # Now, use the evaluate_lazy_column function to resolve the column containing LazyDatasetReference
+        df_resolved_lazy = damaged_folder.resolve_lazy_column(df_damaged_lazy, col_name)
+
+        # To see the result of the resolved column
+        print(20*"\N{cucumber}")
+        print("\N{rainbow}\N{rainbow}\N{rainbow} Resolved DataFrame:")
+        print(df_resolved_lazy)
+        print('Type of df: ', type(df_resolved_lazy))
+        print(20*"\N{cucumber}")
+        print(df_resolved_lazy.explain(optimized=True))
+        print(df_resolved_lazy.select(col_name).collect())
 
        
     # Run the test
