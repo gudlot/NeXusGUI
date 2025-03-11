@@ -604,8 +604,9 @@ class NeXusBatchProcessor(BaseProcessor):
             #for file_data in self.processed_files.values():
             #    for k, v in file_data.items():
             #        logger.debug(f"\N{hot pepper} Key: {k}, Value Type: {type(v)}, Value: {v}")
-                        
-            
+             
+            #TODO: Check what is better later. Both options work here, but one returns a DataFrame, the other imho a LazyFrame.            
+            #return pl.LazyFrame([
             return pl.DataFrame([
                 {k: process_value(v, k) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
