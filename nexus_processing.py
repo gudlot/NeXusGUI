@@ -821,7 +821,6 @@ if __name__ == "__main__":
         df = batch_proc.get_dataframe()
         
     
-    
     def test_healthy():
         file_path = Path("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02349.nxs")
         print(f"File exists: {file_path.exists()}")
@@ -866,10 +865,7 @@ if __name__ == "__main__":
         
         # Process the files and get the DataFrame
         df = processor.get_dataframe()
-                
-        #for col in df.columns:
-        #    print(col)   
-        
+ 
         
         # Print the DataFrame
         print("Processed DataFrame:")
@@ -899,8 +895,4 @@ if __name__ == "__main__":
         #print(df_eager.head())  # Now it prints real data
         
         
-        hdf5_path = df["/scan/apd/data"][0]  # Get the path from the first row of the column
-
-        print("HDF5 path:", hdf5_path)  # Print the HDF5 path
-        
-   #test_healthy()
+    test_healthy()
