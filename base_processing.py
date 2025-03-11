@@ -8,7 +8,7 @@ from lazy_dataset import LazyDatasetReference
 class BaseProcessor:
     def __init__(self):
         self.processed_files = {}  # Stores processed data for each file (path -> data)
-        self._df = None  # Cached DataFrame
+
 
     def _convert_epoch_to_human_readable(self, epoch_time: Union[float, str, bytes, LazyDatasetReference]) -> Optional[str]:
         """Convert epoch time (UNIX seconds) to a human-readable format, resolving lazy references."""
@@ -80,13 +80,5 @@ class BaseProcessor:
         file_data["filename"] = file_path.name
         return file_data
 
-    def _ensure_filename_first_column(self):
-        """Ensure that the 'filename' column is the first column in the DataFrame."""
-        if self._df is not None and "filename" in self._df.columns:
-            columns = ["filename"] + [col for col in self._df.columns if col != "filename"]
-            self._df = self._df.select(columns)
 
-    def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
-        """Return the processed data as a Polars DataFrame."""
-        self.process_files(force_reload)
-        return self._df
+
