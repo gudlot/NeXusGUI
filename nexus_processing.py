@@ -787,7 +787,7 @@ if __name__ == "__main__":
         print(df_resolved_lazy)
         print('Type of df: ', type(df_resolved_lazy))
         print(20*"\N{cucumber}")
-        print(df_resolved_lazy.explain(optimized=True))
+        
         print(df_resolved_lazy.select(col_name).collect())
 
        
