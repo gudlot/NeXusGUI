@@ -10,50 +10,53 @@ class BaseProcessor:
         self.processed_files = {}  # Stores processed data for each file (path -> data)
 
 
-    def _convert_epoch_to_human_readable(self, epoch_time: Union[float, str, bytes, LazyDatasetReference]) -> Optional[str]:
+    def _convert_epoch_to_human_readable(self, epoch_dict: dict) -> Optional[str]:
         """Convert epoch time (UNIX seconds) to a human-readable format, resolving lazy references."""
-        
-        if epoch_time is None:
+
+        if not isinstance(epoch_dict, dict) or "lazy" not in epoch_dict:
+            logging.warning(f"Expected a dictionary with a 'lazy' key, but got: {epoch_dict}")
             return None
 
-        # Resolve lazy dataset reference
-        if isinstance(epoch_time, LazyDatasetReference):
-            epoch_time = epoch_time.load_on_demand()
+        epoch_reference = epoch_dict["lazy"]
 
-        # Handle string/byte conversions
-        if isinstance(epoch_time, (str, bytes)):
-            try:
-                epoch_time = float(epoch_time)  
-            except (ValueError, TypeError):
-                logging.warning(f"Invalid epoch_time: {epoch_time}")
-                return None
+        if not isinstance(epoch_reference, LazyDatasetReference):
+            logging.warning(f"Invalid lazy dataset reference: {epoch_reference}")
+            return None
 
-        if isinstance(epoch_time, (float, int)):
-            try:
-                return datetime.fromtimestamp(epoch_time).strftime("%Y-%m-%d %H:%M:%S")
-            except (ValueError, TypeError) as e:
-                logging.warning(f"Error converting epoch_time: {epoch_time} | Error: {e}")
-                return None
-        
-        logging.warning(f"Invalid epoch_time format: {epoch_time}")
-        return None
+        try:
+            epoch_time = float(epoch_reference.load_on_demand())  # Resolve lazy loading
+            return datetime.fromtimestamp(epoch_time).strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Error converting epoch time {epoch_reference}: {e}")
+            return None
+
 
     def _add_human_readable_time(self, file_data: dict) -> dict:
         """Add a human-readable time column if an 'epoch' dataset is present."""
         
         epoch_key = next((k for k in file_data if k.endswith("epoch")), None)
         if not epoch_key:
-            return file_data  
+            return file_data  # No epoch key found
 
         epoch_value = file_data[epoch_key]
 
+        # Step 1: Resolve 'source' reference if present
         if isinstance(epoch_value, dict) and "source" in epoch_value:
             source_key = epoch_value["source"]
             if source_key in file_data:
-                epoch_value = file_data[source_key]  # Resolve source reference
-        
-        file_data["human_readable_time"] = self._convert_epoch_to_human_readable(epoch_value)
+                epoch_value = file_data[source_key]  # Follow the source reference
+            else:
+                logging.warning(f"Source key {source_key} not found in file_data.")
+                return file_data
+
+        # Step 2: Ensure we have a lazy reference
+        if isinstance(epoch_value, dict) and "lazy" in epoch_value:
+            file_data["human_readable_time"] = self._convert_epoch_to_human_readable(epoch_value)
+        else:
+            logging.warning(f"Epoch dataset is not a valid LazyDatasetReference: {epoch_value}")
+
         return file_data
+
 
     def _convert_start_time_to_human_readable(self, file_data: dict) -> dict:
         """Convert start_time (ISO format) to a human-readable format and store it in file_data."""
@@ -68,12 +71,19 @@ class BaseProcessor:
             start_time_value = start_time_value.decode()
 
         try:
+            # Try parsing with microseconds
             dt_obj = datetime.strptime(start_time_value, "%Y-%m-%dT%H:%M:%S.%f%z")
-            file_data["human_start_time"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
-            logging.warning(f"Warning: Could not parse start_time '{start_time_value}'")
+            try:
+                # Fallback: Try parsing without microseconds
+                dt_obj = datetime.strptime(start_time_value, "%Y-%m-%dT%H:%M:%S%z")
+            except ValueError:
+                logging.warning(f"Could not parse start_time: {start_time_value}")
+                return file_data  # Return unchanged data if parsing fails
 
+        file_data["human_start_time"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
         return file_data
+
 
     def _add_filename(self, file_data: dict, file_path: Path) -> dict:
         """Add a 'filename' column to the file_data dictionary."""
