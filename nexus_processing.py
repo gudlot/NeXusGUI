@@ -590,11 +590,22 @@ class NeXusBatchProcessor(BaseProcessor):
         """
         def process_value(value: Any, key: str) -> Any:
             """Processes each value in the dataset, resolving laziness if needed."""
+            
+            #logger.debug(f"\N{hot pepper}Key {key}")
+            #logger.debug(f"\N{green apple}Value {value}")
+            
+            
             if isinstance(value, dict):
                 return self._resolve_lazy_value(value, key) if resolve else value.get("lazy", value.get("source"))
             return self._process_normal_value(value, key)
 
         try:
+            
+            #for file_data in self.processed_files.values():
+            #    for k, v in file_data.items():
+            #        logger.debug(f"\N{hot pepper} Key: {k}, Value Type: {type(v)}, Value: {v}")
+                        
+            
             return pl.DataFrame([
                 {k: process_value(v, k) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
@@ -645,8 +656,15 @@ class NeXusBatchProcessor(BaseProcessor):
                 
                 if isinstance(data, np.ndarray):
                     return pl.Array(pl.Float64, data.shape)  # 2D case
+                
+                
+                elif isinstance(dataset_ref, str):
+                    return pl.Utf8
+                
+                elif isinstance(dataset_ref, (int, float)):
+                    return pl.Float64 if isinstance(dataset_ref, float) else pl.Int64
 
-            return None  # Default fallback (previously pl.Object)
+            return None  # Default fallback
 
         if isinstance(df, pl.DataFrame):
             # Iterate over column values and return the first detected dtype (ignoring None)
@@ -766,6 +784,7 @@ if __name__ == "__main__":
     def test_broken():
         # Initialize the NeXusBatchProcessor with the broken folder path
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
+        damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/test_folder2/")
         
         
         # Get the DataFrame with regular data (processed files)
@@ -777,6 +796,8 @@ if __name__ == "__main__":
         
         col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
         col_name = '/scan/apd/data'
+        col_name='/scan/instrument/collection/exp_t01'
+        col_name='/scan/data/exp_t01'
         
         df_resolved= damaged_folder.resolve_lazy_references_eagerly(df_damaged, col_name)
 
@@ -820,6 +841,9 @@ if __name__ == "__main__":
         batch_proc=NeXusBatchProcessor(file_path)
         df = batch_proc.get_dataframe()
         
+        print(df.head(15))
+        
+    #test_raw()
     
     def test_healthy():
         file_path = Path("/Users/lotzegud/P08/fio_nxs_and_cmd_tool/nai_250mm_02349.nxs")
@@ -895,4 +919,4 @@ if __name__ == "__main__":
         #print(df_eager.head())  # Now it prints real data
         
         
-    test_healthy()
+    #test_healthy()
