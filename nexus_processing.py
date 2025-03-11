@@ -700,59 +700,57 @@ class NeXusBatchProcessor(BaseProcessor):
         """Evaluate a specific lazy-loaded column in a Polars LazyFrame, 
         resolving LazyDatasetReference objects or other lazy-loaded columns."""
         
-        # Ensure the required columns are in the LazyFrame
-        if 'filename' not in df.collect_schema().names() or dataset_name not in df.collect_schema().names():
+        # Ensure required columns exist in the LazyFrame
+        schema_names = df.collect_schema().names()
+        if 'filename' not in schema_names or dataset_name not in schema_names:
             raise ValueError(f"Column 'filename' or '{dataset_name}' not found in LazyFrame.")
 
-        def resolve_and_load(dataset_ref):
-            """Helper function to resolve and load different types of lazy-loaded data."""
-            logger.debug(f"Type of dataset_ref: {dataset_ref}")
 
-            # Handle None or null values in the dataset column
-            if dataset_ref is None:  # This is equivalent to null in Polars
-                return None
+        def resolve_value(value: Any) -> Any:
+            """Resolves LazyDatasetReference objects and ensures only expected types are handled."""
+            logger.debug(f"Processing value of type {type(value)}: {value}")
+                        
+            # Pass through valid non-lazy types
+            if isinstance(value, (int, float, str, type(None))):
+                return value  
 
-            # Handle LazyDatasetReference: return the reference itself (deferred resolution)
-            if isinstance(dataset_ref, LazyDatasetReference):
-                logger.debug(f"Storing LazyDatasetReference for {dataset_ref}")
-                return dataset_ref.load_on_demand() 
+            #TODO Polars cannot handles nested objects. If this will here ever a problem, the solution could be to store filename, filepath, dataset name in the pl.df. Metadata as string reference. 
+            # Resolve LazyDatasetReference
+            if isinstance(value, LazyDatasetReference):
+                logger.debug(f"Loading LazyDatasetReference for {value}")
+                return value.load_on_demand()
             
-            # Handle LazyFrame: evaluate lazily by collecting the data from LazyFrame
-            if isinstance(dataset_ref, pl.LazyFrame):
-                logger.debug(f"Resolving LazyFrame for column '{dataset_name}'")
-                return dataset_ref.collect()  # Collecting a LazyFrame to turn it into an eager DataFrame
-
             # Handle other potential lazy objects (custom logic for specific types)
-            if isinstance(dataset_ref, pl.LazyList):
-                logger.debug(f"Resolving LazyList for column '{dataset_name}'")
-                return dataset_ref.collect()  # Convert LazyList to a regular list
+            if isinstance(value, pl.LazyList):
+                logger.debug(f"Resolving LazyList for {value} in {dataset_name}")
+                return value.collect()  # Convert LazyList to a regular list
 
             # If it's a path, just return the path value (assuming string type)
-            if isinstance(dataset_ref, str) and dataset_ref.startswith('/'):
-                logging.debug(f"Skipping path value in column '{dataset_name}': {dataset_ref}")
-                return dataset_ref  # Keep path as is
+            if isinstance(value, str) and value.startswith('/'):
+                logging.debug(f"Skipping path value in column '{dataset_name}': {value}")
+                return value  # Keep path as is
             
-            # Handle unexpected types
-            logging.warning(f"Unexpected value in column '{dataset_name}': {dataset_ref}")
-            return None  # Ensure unknown types return None    
+            # Unexpected type → Raise error
+            raise TypeError(f"Unexpected type in column '{dataset_name}': {type(value)}")
+
 
 
         # Infer the correct return dtype for the column after transformation
         infer_dtype_val = self.infer_dtype(df, dataset_name)
-        print('Type in infer_dtype_val of resolve_lazy_column ',infer_dtype_val )
+        logger.debug(f'Type in infer_dtype_val of resolve_lazy_column {infer_dtype_val}')
         
-        # Apply transformation lazily using map_batches to resolve the references or lazy objects
+        # Apply transformation lazily using map_batches
         df_with_resolved_column = df.with_columns(
             pl.col(dataset_name).map_batches(
-                lambda batch: pl.Series([resolve_and_load(ref) for ref in batch]),  # Wrap in pl.Series
-                return_dtype=infer_dtype_val  
+                lambda batch: pl.Series([resolve_value(val) for val in batch]),  # Wrap in pl.Series
+                return_dtype=infer_dtype_val
             ).alias(dataset_name)
         )
 
 
-        logger.debug("Lazy evaluation set up.")
+        logger.debug(f"Lazy evaluation set up for column '{dataset_name}'.")
         
-        return df_with_resolved_column  # Returns a LazyFrame, NOT collected
+        return df_with_resolved_column  # Returns a LazyFrame, though some values may be eagerly evaluated.
 
 
 
