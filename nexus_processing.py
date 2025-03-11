@@ -676,18 +676,20 @@ class NeXusBatchProcessor(BaseProcessor):
             return pl.Object  # Fallback if no valid type was found
 
         elif isinstance(df, pl.LazyFrame):
-            # Process lazily: select first valid non-null row and infer dtype
-            sample_dtype = (
+            # Collect a small sample of non-null values to determine dtype
+            sample_data = (
                 df.select(pl.col(col))
-                .drop_nulls()  # Ensure non-null values
-                .limit(10)  # Take up to 10 rows to avoid stopping at a None entry
-                .select(pl.col(col).map_elements(resolve_dtype, return_dtype=pl.Object))
+                .drop_nulls()
+                .limit(10)
                 .collect()
+                .to_series(0)  # Convert to Polars Series
             )
 
-            # Extract the first valid dtype
-            dtypes = [dtype for dtype in sample_dtype.to_series(0) if dtype is not None]
-            return dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
+            # Apply `resolve_dtype` dynamically
+            dtypes = [resolve_dtype(value) for value in sample_data if value is not None]
+            detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
+
+            return detected_dtype  # Directly return inferred dtype without redundant map_elements
 
         else:
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
@@ -797,7 +799,7 @@ if __name__ == "__main__":
         col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
         col_name = '/scan/apd/data'
         col_name='/scan/instrument/collection/exp_t01'
-        col_name='/scan/data/exp_t01'
+        #col_name='/scan/data/exp_t01'
         
         df_resolved= damaged_folder.resolve_lazy_references_eagerly(df_damaged, col_name)
 
