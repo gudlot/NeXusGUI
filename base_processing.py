@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from pathlib import Path 
 from typing import Optional, Union
+from lazy_dataset import LazyDatasetReference
 
 class BaseProcessor:
     def __init__(self):
@@ -20,11 +21,24 @@ class BaseProcessor:
         # Resolve lazy datasets before conversion
         if isinstance(epoch_time, dict) and "lazy" in epoch_time:
             epoch_time = epoch_time["lazy"]()  # Evaluate lazily
+            
+        # Ensure epoch_time is a valid number (float or int)
+        if isinstance(epoch_time, (str, bytes)):  # If it's a string or bytes, try to convert it
+            try:
+                epoch_time = float(epoch_time)  # Convert to float if it's a string or bytes
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid epoch_time: {epoch_time}")
+                return None
 
-        try:
-            return datetime.fromtimestamp(epoch_time).strftime("%Y-%m-%d %H:%M:%S")
-        except (ValueError, TypeError):
-            logging.warning(f"Invalid epoch_time: {epoch_time}")
+        if isinstance(epoch_time, (float, int)):
+            try:
+                # Convert to human-readable format
+                return datetime.fromtimestamp(epoch_time).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError) as e:
+                logging.warning(f"Error in converting epoch_time: {epoch_time} | Error: {e}")
+                return None
+        else:
+            logging.warning(f"Invalid epoch_time format: {epoch_time}")
             return None
 
 
@@ -55,19 +69,24 @@ class BaseProcessor:
 
     def _convert_start_time_to_human_readable(self, file_data: dict) -> dict:
         """Convert start_time (ISO format) to a human-readable format and store it in file_data."""
-        for key in file_data:
-            if "start_time" in key:  # Check if key contains 'start_time'
-                start_time = file_data[key]
-                
-                if isinstance(start_time, bytes):  # Decode if stored as bytes
-                    start_time = start_time.decode()
+        
+        # Find the key that contains 'epoch' (e.g., "/scan/data/epoch")
+        start_time_key = next((k for k in file_data if k.endswith("start_time")), None)
+        
+        if not start_time_key:
+            return file_data  # No start_time found
+        
+        start_time_value= file_data[start_time_key]
+        
+        if isinstance(start_time_value, bytes):  # Decode if stored as bytes
+            start_time_value = start_time_value.decode()
 
-                try:
-                    dt_obj = datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%S.%f%z")
-                    human_readable = dt_obj.strftime("%Y-%m-%d %H:%M:%S")  # No timezone, otherwise %Z
-                    file_data["human_start_time"] = human_readable  # Store in dictionary
-                except ValueError:
-                    print(f"Warning: Could not parse start_time '{start_time}'")
+        try:
+            dt_obj = datetime.strptime(start_time_value, "%Y-%m-%dT%H:%M:%S.%f%z")
+            human_readable = dt_obj.strftime("%Y-%m-%d %H:%M:%S")  # No timezone, otherwise %Z
+            file_data["human_start_time"] = human_readable  # Store in dictionary
+        except ValueError:
+            print(f"Warning: Could not parse start_time '{start_time_value}'")
 
         return file_data  # Return updated dictionary
 
