@@ -532,56 +532,76 @@ class NeXusBatchProcessor(BaseProcessor):
             print("  No type inconsistencies found.")
 
 
+    @staticmethod
+    def _resolve_lazy_value(value: Dict[str, Any], key: str) -> Any:
+        """Resolves a lazy dataset reference or function if required.
+        
+        Args:
+            value (Dict[str, Any]): Dictionary containing "lazy" or "source" keys.
+            key (str): The key corresponding to this value in the dataset.
+        
+        Returns:
+            Any: The resolved dataset, reference, or None if resolution fails.
+        """
+        lazy_ref = value.get("lazy")
+        
+        if lazy_ref is None:
+            return value.get("source")  # Return source reference if present
+
+        try:
+            if isinstance(lazy_ref, LazyDatasetReference):
+                return lazy_ref.load_on_demand()  # Resolve LazyDatasetReference
+            if callable(lazy_ref):
+                return lazy_ref()  # Call function to resolve dataset
+            return lazy_ref  # Return as-is if it's neither callable nor a LazyDatasetReference
+        except Exception as e:
+            logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
+            return None  # Return None if resolution fails
+
+    @staticmethod
+    def _process_normal_value(value: Any, key: str) -> Any:
+        """Validates and processes non-lazy values.
+
+        Args:
+            value (Any): The value to process.
+            key (str): The key corresponding to this value.
+
+        Returns:
+            Any: The validated and processed value.
+
+        Raises:
+            ValueError: If an invalid type is encountered.
+        """
+        if isinstance(value, (float, int, str, type(None))):
+            return value  # Return valid types directly
+
+        raise ValueError(
+            f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
+        )
 
     def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
-        """Constructs a Polars DataFrame from processed files."""
+        """Constructs a Polars DataFrame from processed files.
 
-        def resolve_value(value, key: str):
-            """Ensure values are either resolved or stored as references.
+        Args:
+            resolve (bool): Whether to resolve lazy dataset references.
 
-            Raises:
-                ValueError: If an inconsistency is detected (e.g., mixed types).
-            """
-            # Handle lazy dataset dictionary structure
+        Returns:
+            pl.DataFrame: The constructed Polars DataFrame.
+        """
+        def process_value(value: Any, key: str) -> Any:
+            """Processes each value in the dataset, resolving laziness if needed."""
             if isinstance(value, dict):
-                if "lazy" in value:  # Expect LazyDatasetReference here
-                    lazy_ref = value["lazy"]
-                    if resolve:
-                        try:
-                            if isinstance(lazy_ref, LazyDatasetReference):
-                                return lazy_ref.load_on_demand()  # Resolve the reference
-                            elif callable(lazy_ref):
-                                return lazy_ref()  # If it's a function, call it
-                            else:
-                                return lazy_ref  # Return as-is if it's neither a function nor a LazyDatasetReference
-                        except Exception as e:
-                            logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
-                            return None  # Return None if resolution fails
-                    else:
-                        return lazy_ref  # Return LazyDatasetReference without resolving
+                return self._resolve_lazy_value(value, key) if resolve else value.get("lazy", value.get("source"))
+            return self._process_normal_value(value, key)
 
-                if "source" in value:
-                    return value["source"]  # Return the source reference directly
-
-            # Handle normal key-value pairs (expected types: float, int, str, None)
-            if isinstance(value, (float, int, str, type(None))):
-                return value
-            
-            # Unexpected type → Raise error
-            raise ValueError(
-                f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
-            )
-
-        # Build the DataFrame from processed files
         try:
             return pl.DataFrame([
-                {k: resolve_value(v, k) for k, v in file_data.items()}
+                {k: process_value(v, k) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
             ])
         except ValueError as e:
             logging.error(f"Error building DataFrame: {e}")
-            raise  # Re-raise the error for further debugging
-
+            raise  # Re-raise for debugging
 
 
 
