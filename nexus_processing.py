@@ -8,42 +8,13 @@ from typing import Optional, Tuple, Dict, Any
 from base_processing import BaseProcessor
 from collections import defaultdict
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor
+from lazy_dataset import LazyDatasetReference
+
+
 
 # Configure the logger
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)  # Define the logger instance
-
-@dataclass
-class LazyDatasetReference:
-    directory: Path
-    file_name: str
-    dataset_name: str
-
-    def load_on_demand(self):
-        """Load dataset from HDF5 file lazily."""
-        file_path = self.directory / self.file_name
-        with h5py.File(file_path, "r") as f:
-            data = f[self.dataset_name][:]
-            
-            # Check for empty data (0 elements)
-            if data.size == 0:
-                return None  # Missing or empty data
-            
-            if data.ndim == 1:
-                if data.size == 0:
-                    #logger.debug(f"{self.file_name} has no values")
-                    return None  # Empty 1D array should return None
-                return data.tolist()  # Will be stored as pl.List(pl.Float64)
-
-            elif data.ndim == 2:
-                # Handle empty 2D arrays with zero elements
-                if data.shape[0] == 0 or data.shape[1] == 0:
-                    return None  # 2D array with 0 rows or 0 columns is treated as None
-                return data  # Will be stored as pl.Array(shape, pl.Float64)
-
-            else:
-                raise ValueError(f"Unexpected shape {data.shape} in dataset {self.dataset_name}")
 
 
 
@@ -600,17 +571,20 @@ class NeXusBatchProcessor(BaseProcessor):
             return self._process_normal_value(value, key)
 
         try:
-            
-            #for file_data in self.processed_files.values():
-            #    for k, v in file_data.items():
-            #        logger.debug(f"\N{hot pepper} Key: {k}, Value Type: {type(v)}, Value: {v}")
-             
-            #TODO: Check what is better later. Both options work here, but one returns a DataFrame, the other imho a LazyFrame.            
-            #return pl.LazyFrame([
-            return pl.DataFrame([
+                    
+            #TODO: Check what is better later. Both options work here, but one returns a DataFrame, the other imho a LazyFrame.   
+            #df=pl.DataFrame([        
+            df=  pl.LazyFrame([
                 {k: process_value(v, k) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
             ])
+            
+            #This confirms the result is a realy pl.lazyframe
+            logger.debug(10* "\N{red apple}")
+            logger.debug(f"{type(df)}")
+            logger.debug(f"{df.explain(optimized=True)}")
+            logger.debug(10* "\N{red apple}")
+            
         except ValueError as e:
             logging.error(f"Error building DataFrame: {e}")
             raise  # Re-raise for debugging
@@ -820,7 +794,7 @@ if __name__ == "__main__":
         
         print("\N{banana}\N{banana}\N{banana}")
         
-        # Now, use the evaluate_lazy_column function to resolve the column containing LazyDatasetReference
+        # Now, use the resolve_lazy_column function to resolve the column containing LazyDatasetReference
         df_resolved_lazy = damaged_folder.resolve_lazy_column(df_damaged_lazy, col_name)
 
         # To see the result of the resolved column
