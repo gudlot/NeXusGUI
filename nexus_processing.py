@@ -713,7 +713,7 @@ class NeXusBatchProcessor(BaseProcessor):
 
         def resolve_value(value: Any) -> Any:
             """Resolves LazyDatasetReference objects and ensures only expected types are handled."""
-            logger.debug(f"Processing value of type {type(value)}: {value}")
+            #logger.debug(f"Processing value of type {type(value)}: {value}")
                         
             # Pass through valid non-lazy types
             if isinstance(value, (int, float, str, type(None), pl.Series)):
