@@ -716,19 +716,16 @@ class NeXusBatchProcessor(BaseProcessor):
             logger.debug(f"Processing value of type {type(value)}: {value}")
                         
             # Pass through valid non-lazy types
-            if isinstance(value, (int, float, str, type(None))):
+            if isinstance(value, (int, float, str, type(None), pl.Series)):
                 return value  
 
-            #TODO Polars cannot handles nested objects. If this will here ever a problem, the solution could be to store filename, filepath, dataset name in the pl.df. Metadata as string reference. 
+            # TODO: Polars cannot handle nested objects. A solution could be to store metadata(filename, filepath, dataset name) as string references. 
+            
             # Resolve LazyDatasetReference
             if isinstance(value, LazyDatasetReference):
                 logger.debug(f"Loading LazyDatasetReference for {value}")
                 return value.load_on_demand()
-            
-            # Handle other potential lazy objects (custom logic for specific types)
-            if isinstance(value, pl.LazyList):
-                logger.debug(f"Resolving LazyList for {value} in {dataset_name}")
-                return value.collect()  # Convert LazyList to a regular list
+    
 
             # If it's a path, just return the path value (assuming string type)
             if isinstance(value, str) and value.startswith('/'):
@@ -775,7 +772,7 @@ if __name__ == "__main__":
         
         
         # Get the DataFrame with regular data (processed files)
-        df_damaged = damaged_folder.get_dataframe()
+        df_damaged = damaged_folder.get_dataframe(resolve=True)
         print("Regular DataFrame (df_damaged):")
         print(type(df_damaged))
         
@@ -799,7 +796,7 @@ if __name__ == "__main__":
         print(30*"\N{pineapple}")
         
         # Get the DataFrame with lazy-loaded data (evaluated columns)
-        df_damaged_lazy = damaged_folder.get_lazy_dataframe()
+        df_damaged_lazy = damaged_folder.get_dataframe()
         print("\N{rainbow}\N{rainbow}\N{rainbow} Lazy-loaded DataFrame (df_damaged_lazy):")
         
         print(3*"\N{hot pepper}", type(df_damaged_lazy) )
