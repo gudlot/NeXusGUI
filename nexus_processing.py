@@ -362,20 +362,25 @@ class NeXusBatchProcessor(BaseProcessor):
         self._df = None  # Cached DataFrame, is eager
         logging.info(f"Found {len(self.nxs_files)} NeXus files.")
 
+
     def update_files(self):
         """Check for new files in the directory and update the file list while maintaining order."""
         
         logging.info(f"Current path in update_files: {self.directory}")
-        
+
         all_files = sorted(self.directory.glob("*.nxs"))  # Retrieve and sort all files
-        existing_files = set(self.processed_files.keys())
+        all_files_set = set(map(str, all_files))  # Store as strings for quick lookup
+        existing_files_set = set(map(str, self.nxs_files))  # Current tracked files
+        
+        # Remove missing files & preserve order
+        self.nxs_files = [file for file in self.nxs_files if str(file) in all_files_set]
 
-        self.nxs_files = [file for file in all_files if str(file) not in existing_files] + [
-            file for file in self.nxs_files if str(file) in existing_files
-        ]
+        # Add new files while keeping order
+        new_files = [file for file in all_files if str(file) not in existing_files_set]
+        self.nxs_files.extend(new_files)
 
-        if len(self.nxs_files) > len(existing_files):
-            logging.info(f"Detected {len(self.nxs_files) - len(existing_files)} new files.")
+        if new_files:
+            logging.info(f"Detected {len(new_files)} new files.")
 
 
 
