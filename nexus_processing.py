@@ -543,7 +543,7 @@ class NeXusBatchProcessor(BaseProcessor):
         Raises:
             ValueError: If an invalid type is encountered.
         """
-        if isinstance(value, (float, int, str, type(None))):
+        if isinstance(value, (float, int, str, type(None), list)):
             return value  # Return valid types directly
 
         raise ValueError(
@@ -574,7 +574,7 @@ class NeXusBatchProcessor(BaseProcessor):
                     
             #TODO: Check what is better later. Both options work here, but one returns a DataFrame, the other imho a LazyFrame.   
             #df=pl.DataFrame([        
-            df=  pl.LazyFrame([
+            df =  pl.LazyFrame([
                 {k: process_value(v, k) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
             ])
@@ -584,6 +584,7 @@ class NeXusBatchProcessor(BaseProcessor):
             logger.debug(f"{type(df)}")
             logger.debug(f"{df.explain(optimized=True)}")
             logger.debug(10* "\N{red apple}")
+            
             
         except ValueError as e:
             logging.error(f"Error building DataFrame: {e}")
@@ -767,6 +768,9 @@ if __name__ == "__main__":
         # Get the DataFrame with regular data (processed files)
         df_damaged = damaged_folder.get_dataframe()
         print("Regular DataFrame (df_damaged):")
+        print(type(df_damaged))
+        
+        
         print(df_damaged.head())
         
         print(30*"\N{pineapple}")
@@ -775,6 +779,7 @@ if __name__ == "__main__":
         col_name = '/scan/apd/data'
         col_name='/scan/instrument/collection/exp_t01'
         #col_name='/scan/data/exp_t01'
+        col_name='human_readable_time'
         
         df_resolved= damaged_folder.resolve_lazy_references_eagerly(df_damaged, col_name)
 
