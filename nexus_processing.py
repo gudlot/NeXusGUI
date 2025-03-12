@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import logging
 from functools import lru_cache
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, Union
 from base_processing import BaseProcessor
 from collections import defaultdict
 from dataclasses import dataclass
@@ -589,10 +589,10 @@ class NeXusBatchProcessor(BaseProcessor):
             
             #This confirms the result is a realy pl.lazyframe
             logger.debug(10* "\N{red apple}")
-            logger.debug(f"{type(df)}")
-            logger.debug(f"{df.explain(optimized=True)}")
+            logger.debug(f"{type(self._df)}")
+            logger.debug(f"{self._df.explain(optimized=True)}")
             logger.debug(10* "\N{red apple}")
-            logger.debug(f"Generated LazyFrame with {self._df.height} rows.")
+        
             
             return self._df.collect() if resolve else self._df  # Collect if resolving          
         except ValueError as e:
@@ -602,8 +602,20 @@ class NeXusBatchProcessor(BaseProcessor):
         
 
 
-    def get_dataframe(self, force_reload: bool = False, resolve: bool = True) -> pl.LazyFrame | pl.DataFrame:
-        """Return the processed data as a Polars LazyFrame (default) or DataFrame (if resolved)."""
+    def get_dataframe(self, force_reload: bool = False, resolve: bool = False) -> Union[pl.LazyFrame, pl.DataFrame]:
+        
+        """Return the processed data as either a lazy Polars DataFrame or an eagerly evaluated one.
+
+        Args:
+            force_reload (bool): Whether to reload files before building the DataFrame.
+            resolve (bool): Whether to return an eagerly evaluated `pl.DataFrame` (default: True).
+
+        Returns:
+            Union[pl.LazyFrame, pl.DataFrame]: A Polars LazyFrame (if resolve=False) or DataFrame (if resolve=True).
+            
+        df_lazy = obj.get_dataframe(resolve=False)  # Returns a LazyFrame
+        df_eager = obj.get_dataframe(resolve=True)  # Returns a DataFrame
+        """
         
         self.process_files(force_reload)
 
