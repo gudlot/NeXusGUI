@@ -602,28 +602,15 @@ class NeXusBatchProcessor(BaseProcessor):
         
 
 
-    def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
-        """Return the processed data as a Polars DataFrame with evaluated datasets."""
-        self.process_files(force_reload)
+    def get_dataframe(self, force_reload: bool = False, resolve: bool = True) -> pl.LazyFrame | pl.DataFrame:
+        """Return the processed data as a Polars LazyFrame (default) or DataFrame (if resolved)."""
         
-        # Return cached `_df` if available
+        self.process_files(force_reload)
+
         if self._df is not None:
-            return self._df
-
-        return self._build_dataframe(resolve=True)  # Now loads actual values
-
-
-
-    def get_lazy_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
-        """Return the processed data as a lazy-loaded Polars DataFrame."""
-
-        self.process_files(force_reload)
+            return self._df.collect() if resolve and isinstance(self._df, pl.LazyFrame) else self._df
         
-        # Ensure _df is populated without resolving dataset references
-        if self._df is None:
-            self._df = self._build_dataframe(resolve=False)  # Keep LazyDatasetReference
-
-        return self._df.lazy()  # Convert to LazyFrame for deferred execution
+        return self._build_dataframe(resolve=resolve)
 
 
     @staticmethod
