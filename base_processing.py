@@ -24,12 +24,18 @@ class BaseProcessor:
             return None
 
         try:
-            epoch_times = epoch_reference.load_on_demand()  # Should return a list
+            epoch_times = epoch_reference.load_on_demand()  # Should return a list of floats
+            logging.debug(f"Epoch times {epoch_times}")
+
             if not isinstance(epoch_times, list):  # Ensure it's a list
                 logging.warning(f"Expected a list of timestamps, but got: {epoch_times}")
                 return None
 
-            return [datetime.fromtimestamp(float(t)).strftime("%Y-%m-%d %H:%M:%S") for t in epoch_times]
+            # Convert float seconds to integer nanoseconds
+            epoch_ns = [int(t * 1_000_000_000) for t in epoch_times]
+
+            return pl.Series("human_readable_time", epoch_ns, dtype=pl.Datetime("ns"))
+
         except (ValueError, TypeError) as e:
             logging.warning(f"Error converting epoch times {epoch_times}: {e}")
             return None
