@@ -551,7 +551,7 @@ class NeXusBatchProcessor(BaseProcessor):
         Raises:
             ValueError: If an invalid type is encountered.
         """
-        if isinstance(value, (float, int, str, type(None), list)):
+        if isinstance(value, (float, int, str, type(None), list, pl.Series)):
             return value  # Return valid types directly
 
         raise ValueError(
@@ -629,12 +629,16 @@ class NeXusBatchProcessor(BaseProcessor):
     def infer_dtype(df: pl.DataFrame | pl.LazyFrame, col: str):
         """Infer the appropriate Polars dtype based on the first valid dataset reference."""
         
+        
         def resolve_dtype(dataset_ref):
             """Determine dtype from a single dataset reference."""
             if isinstance(dataset_ref, LazyDatasetReference):
                 data = dataset_ref.load_on_demand()
                 if data is None:
                     return None  # Skip None values
+                
+                if isinstance(data, pl.Series):
+                    return data.dtype  # Use Polars' built-in dtype inference   
                 
                 if isinstance(data, list):
                     return pl.List(pl.Float64)  # 1D case
@@ -670,6 +674,8 @@ class NeXusBatchProcessor(BaseProcessor):
                 .to_series(0)  # Convert to Polars Series
             )
 
+            #logger.debug(f"Sample_data: {sample_data}")
+            
             # Apply `resolve_dtype` dynamically
             dtypes = [resolve_dtype(value) for value in sample_data if value is not None]
             detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
@@ -766,6 +772,9 @@ class NeXusBatchProcessor(BaseProcessor):
 if __name__ == "__main__":
       
     def test_broken():
+        print(pl.__version__)
+
+               
         # Initialize the NeXusBatchProcessor with the broken folder path
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/test_folder2/")
@@ -816,6 +825,22 @@ if __name__ == "__main__":
         print(20*"\N{cucumber}")
         
         print(df_resolved_lazy.select(col_name).collect())
+
+        import random
+        def select_and_execute(df_lazy: pl.LazyFrame, num_cols: int = 10):
+            """Selects 10 random columns and executes .select(col_name).collect() on each."""
+            all_columns = list(df_lazy.schema.keys())
+            if len(all_columns) < num_cols:
+                raise ValueError(f"DataFrame only has {len(all_columns)} columns, cannot select {num_cols}.")
+
+            selected_columns = random.sample(all_columns, num_cols)
+
+            for col_name in selected_columns:
+                print(f"Column: {col_name}")
+                print(df_lazy.select(col_name).collect())
+        
+        # Run function
+        select_and_execute(df_resolved_lazy)
 
        
     # Run the test
