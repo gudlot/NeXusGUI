@@ -390,6 +390,9 @@ class NeXusBatchProcessor(BaseProcessor):
         if force_reload:
             self.structure_list.clear()
             self.processed_files.clear()
+            self._df = None  # Clear cached DataFrame
+            self.nxs_files = list(self.directory.glob("*.nxs"))  # Reload file list
+            
         
         for file_path in self.nxs_files:
             str_path = str(file_path)
@@ -547,7 +550,7 @@ class NeXusBatchProcessor(BaseProcessor):
             return value  # Return valid types directly
 
         raise ValueError(
-            f"Inconsistent type for key '{key}': Expected float, int, str, or None, got {type(value)}"
+            f"Inconsistent type for key '{key}': Expected float, int, str, list, or None, got {type(value)}"
         )
 
     def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
@@ -574,7 +577,7 @@ class NeXusBatchProcessor(BaseProcessor):
                     
             #TODO: Check what is better later. Both options work here, but one returns a DataFrame, the other imho a LazyFrame.   
             #df=pl.DataFrame([        
-            df =  pl.LazyFrame([
+            self._df =  pl.LazyFrame([
                 {k: process_value(v, k) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
             ])
@@ -585,11 +588,12 @@ class NeXusBatchProcessor(BaseProcessor):
             logger.debug(f"{df.explain(optimized=True)}")
             logger.debug(10* "\N{red apple}")
             
-            
+            return self._df.collect() if resolve else self._df  # Collect if resolving          
         except ValueError as e:
             logging.error(f"Error building DataFrame: {e}")
             raise  # Re-raise for debugging
-
+        
+        
 
 
     def get_dataframe(self, force_reload: bool = False) -> pl.DataFrame:
