@@ -558,7 +558,7 @@ class NeXusBatchProcessor(BaseProcessor):
             f"Inconsistent type for key '{key}': Expected float, int, str, list, or None, got {type(value)}"
         )
 
-    def _build_dataframe(self, resolve: bool = False) -> pl.DataFrame:
+    def _build_dataframe(self, resolve: bool = False) -> pl.LazyFrame | pl.DataFrame:
         """Constructs a Polars DataFrame from processed files.
 
         Args:
@@ -592,6 +592,7 @@ class NeXusBatchProcessor(BaseProcessor):
             logger.debug(f"{type(df)}")
             logger.debug(f"{df.explain(optimized=True)}")
             logger.debug(10* "\N{red apple}")
+            logger.debug(f"Generated LazyFrame with {self._df.height} rows.")
             
             return self._df.collect() if resolve else self._df  # Collect if resolving          
         except ValueError as e:
