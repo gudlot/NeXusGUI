@@ -24,10 +24,14 @@ class BaseProcessor:
             return None
 
         try:
-            epoch_time = float(epoch_reference.load_on_demand())  # Resolve lazy loading
-            return datetime.fromtimestamp(epoch_time).strftime("%Y-%m-%d %H:%M:%S")
+            epoch_times = epoch_reference.load_on_demand()  # Should return a list
+            if not isinstance(epoch_times, list):  # Ensure it's a list
+                logging.warning(f"Expected a list of timestamps, but got: {epoch_times}")
+                return None
+
+            return [datetime.fromtimestamp(float(t)).strftime("%Y-%m-%d %H:%M:%S") for t in epoch_times]
         except (ValueError, TypeError) as e:
-            logging.warning(f"Error converting epoch time {epoch_reference}: {e}")
+            logging.warning(f"Error converting epoch times {epoch_times}: {e}")
             return None
 
 
