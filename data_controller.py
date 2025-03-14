@@ -97,8 +97,32 @@ class DataController:
                 .sort("scan_id")  # Sort by scan_id
             )
 
+            print(30 * "\N{pineapple}")
             logger.debug(f"nxs_data type: {type(nxs_data)}")
+            nxs_data_eager = nxs_data.collect()
+            print("DataFrame nxs_data_eager Structure:")
+            print(nxs_data_eager.head())  # Print the first few rows of the DataFrame
             
+                        # Let's say row_index = 1 for the example
+            # Let's say row_index = 1 for the example
+            row_index = 1
+
+            # Access the content of the column for row_index
+            lazy_frame_in_row = nxs_data_eager[row_index, "/scan/data/epoch"]
+            print(nxs_data_eager[row_index, "/scan/data/epoch"])
+            print(type(nxs_data_eager[row_index, "/scan/data/epoch"]))
+
+            # Check if the value is a LazyFrame before calling collect
+            if isinstance(lazy_frame_in_row, pl.LazyFrame):
+                # Collect the nested LazyFrame content
+                resolved_data = lazy_frame_in_row.collect()
+                print("Resolved data from row {}:".format(row_index), resolved_data)
+            else:
+                # Handle the case where the data is not a LazyFrame
+                print(f"Row {row_index} does not contain a LazyFrame. It contains: {lazy_frame_in_row}")
+            print(30 * "\N{pineapple}")
+                        
+                        
 
             # Resolve nested LazyDatasets if any
             if isinstance(nxs_data, pl.LazyFrame):
@@ -308,3 +332,5 @@ class DataController:
         print(30 * "\N{rainbow}")
 
         return df
+    
+    if __name__ == "__main__":
