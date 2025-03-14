@@ -694,6 +694,11 @@ class NeXusBatchProcessor(BaseProcessor):
 
         When calling `.collect()` on a LazyFrame, ensure `eager=True` is used to resolve data.
         """
+        # Ensure required columns exist in the LazyFrame
+        schema_names = df.collect_schema().names()
+        if col_name not in schema_names:
+            raise ValueError(f"Column 'filename' or '{col_name}' not found in LazyFrame.")
+        
 
         def resolve_value(value: Any) -> Any:
             """Resolves LazyDatasetReference objects eagerly if needed."""
@@ -703,6 +708,14 @@ class NeXusBatchProcessor(BaseProcessor):
 
         # Infer return dtype
         infer_dtype_val = self.infer_dtype(df, col_name)
+        
+        
+        
+        logger.debug(10* "\N{green apple}")
+        print(f"Inferred dtype: { infer_dtype_val}")
+        logger.debug(f"{type(df)}")
+        logger.debug(10* "\N{green apple}")
+        
 
         if isinstance(df, pl.DataFrame) or eager:
             # Resolve eagerly
@@ -719,6 +732,7 @@ class NeXusBatchProcessor(BaseProcessor):
                         return_dtype=infer_dtype_val
                     ).alias(col_name)
                 )
+            
             return df  # Keep LazyDatasetReference untouched for deferred resolution
 
         else:
