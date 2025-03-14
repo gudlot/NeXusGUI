@@ -694,11 +694,15 @@ class NeXusBatchProcessor(BaseProcessor):
 
         When calling `.collect()` on a LazyFrame, ensure `eager=True` is used to resolve data.
         """
-        # Ensure required columns exist in the LazyFrame
-        schema_names = df.collect_schema().names()
-        if col_name not in schema_names:
-            raise ValueError(f"Column 'filename' or '{col_name}' not found in LazyFrame.")
-        
+        # Validate column existence
+        if isinstance(df, pl.LazyFrame):
+            schema_names = df.collect_schema().names()
+            if col_name not in schema_names:
+                raise ValueError(f"Column '{col_name}' not found in LazyFrame schema.")
+        elif isinstance(df, pl.DataFrame):
+            if col_name not in df.columns:
+                raise ValueError(f"Column '{col_name}' not found in DataFrame.")
+
 
         def resolve_value(value: Any) -> Any:
             """Resolves LazyDatasetReference objects eagerly if needed."""
@@ -713,7 +717,7 @@ class NeXusBatchProcessor(BaseProcessor):
         
         logger.debug(10* "\N{green apple}")
         print(f"Inferred dtype: { infer_dtype_val}")
-        logger.debug(f"{type(df)}")
+        logger.debug(f"DataFrame type: {type(df)} Schema: {df.schema}")
         logger.debug(10* "\N{green apple}")
         
 
@@ -723,20 +727,14 @@ class NeXusBatchProcessor(BaseProcessor):
                 pl.col(col_name).map_elements(resolve_value, return_dtype=infer_dtype_val).alias(col_name)
             )
 
-        elif isinstance(df, pl.LazyFrame):
-            # If eager=True, resolve before collecting
-            if eager:
-                return df.with_columns(
-                    pl.col(col_name).map_batches(
-                        lambda batch: pl.Series([resolve_value(val) for val in batch]), 
-                        return_dtype=infer_dtype_val
-                    ).alias(col_name)
-                )
-            
-            return df  # Keep LazyDatasetReference untouched for deferred resolution
+        # Keep lazy references if eager=False
+        return df.with_columns(
+            pl.col(col_name).map_batches(
+                lambda batch: pl.Series([resolve_value(val) for val in batch]),
+                return_dtype=infer_dtype_val
+            ).alias(col_name)
+        ) if isinstance(df, pl.LazyFrame) else df
 
-        else:
-            raise TypeError(f"Unsupported DataFrame type: {type(df)}")   
         
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
