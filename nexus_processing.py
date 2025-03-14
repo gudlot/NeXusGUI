@@ -686,7 +686,7 @@ class NeXusBatchProcessor(BaseProcessor):
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
         
         
-     def resolve_column(self, df: pl.DataFrame | pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
+    def resolve_column(self, df: pl.DataFrame | pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
         """Resolve LazyDatasetReference objects in a column.
 
         - If `eager=True`, force resolves `LazyDatasetReference` objects, even in LazyFrames.
@@ -717,7 +717,8 @@ class NeXusBatchProcessor(BaseProcessor):
         
         logger.debug(10* "\N{green apple}")
         print(f"Inferred dtype: { infer_dtype_val}")
-        logger.debug(f"DataFrame type: {type(df)} Schema: {df.schema}")
+        logger.debug(f"DataFrame type: {type(df)}")
+        #logger.debug(f" Schema: {df.schema}")
         logger.debug(10* "\N{green apple}")
         
 
@@ -770,8 +771,8 @@ if __name__ == "__main__":
         #col_name='/scan/data/exp_t01'
         #col_name='human_readable_time'
         
-        df_resolved= damaged_folder.resolve_lazy_references_eagerly(df_damaged, col_name)
-        df_resolved2= damaged_folder.resolve_lazy_references_eagerly(damaged_folder.get_dataframe(resolve=False), col_name)
+        df_resolved= damaged_folder.resolve_column(df_damaged, col_name)
+        df_resolved2= damaged_folder.resolve_column(damaged_folder.get_dataframe(resolve=False), col_name, eager=False)
 
         # After applying the transformation, inspect the first row
         print('\n\n df_resolved is ...')
@@ -795,7 +796,7 @@ if __name__ == "__main__":
         print("\N{banana}\N{banana}\N{banana}")
         
         # Now, use the resolve_lazy_column function to resolve the column containing LazyDatasetReference
-        df_resolved_lazy = damaged_folder.resolve_lazy_column(df_damaged_lazy, col_name)
+        df_resolved_lazy = damaged_folder.resolve_column(df_damaged_lazy, col_name, eager=False)
         
 
         # To see the result of the resolved column
