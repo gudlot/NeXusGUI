@@ -680,12 +680,52 @@ class NeXusBatchProcessor(BaseProcessor):
             dtypes = [resolve_dtype(value) for value in sample_data if value is not None]
             detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
 
-            return detected_dtype  # Directly return inferred dtype without redundant map_elements
-
+            return detected_dtype 
+        
         else:
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
+        
+        
+     def resolve_column(self, df: pl.DataFrame | pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
+        """Resolve LazyDatasetReference objects in a column.
 
+        - If `eager=True`, force resolves `LazyDatasetReference` objects, even in LazyFrames.
+        - If `eager=False`, keeps references for lazy resolution.
 
+        When calling `.collect()` on a LazyFrame, ensure `eager=True` is used to resolve data.
+        """
+
+        def resolve_value(value: Any) -> Any:
+            """Resolves LazyDatasetReference objects eagerly if needed."""
+            if isinstance(value, LazyDatasetReference):
+                return value.load_on_demand()  # Resolve if needed
+            return value  # Other values remain unchanged
+
+        # Infer return dtype
+        infer_dtype_val = self.infer_dtype(df, col_name)
+
+        if isinstance(df, pl.DataFrame) or eager:
+            # Resolve eagerly
+            return df.with_columns(
+                pl.col(col_name).map_elements(resolve_value, return_dtype=infer_dtype_val).alias(col_name)
+            )
+
+        elif isinstance(df, pl.LazyFrame):
+            # If eager=True, resolve before collecting
+            if eager:
+                return df.with_columns(
+                    pl.col(col_name).map_batches(
+                        lambda batch: pl.Series([resolve_value(val) for val in batch]), 
+                        return_dtype=infer_dtype_val
+                    ).alias(col_name)
+                )
+            return df  # Keep LazyDatasetReference untouched for deferred resolution
+
+        else:
+            raise TypeError(f"Unsupported DataFrame type: {type(df)}")   
+        
+
+    #TODO: This method would also work on a pl.LazyFrame       
     def resolve_lazy_references_eagerly(self, df: pl.DataFrame, col_name: str) -> pl.DataFrame:
         """Resolve the LazyDatasetReference objects eagerly in a given column of a DataFrame."""
         
@@ -694,10 +734,16 @@ class NeXusBatchProcessor(BaseProcessor):
         
         print(f"Inferred dtype: { infer_dtype_val}")
         
+        logger.debug(10* "\N{green apple}")
+        logger.debug(f"{type(df)}")
+        #logger.debug(f"{self._df.explain(optimized=True)}")
+        logger.debug(10* "\N{green apple}")
+
+
         # Step 2: Apply transformation to resolve LazyDatasetReferences eagerly
         df_resolved = df.with_columns(
             pl.col(col_name).map_elements(
-                lambda ref: ref.load_on_demand() if isinstance(ref, LazyDatasetReference) else None,
+                lambda ref: ref.load_on_demand() if isinstance(ref, LazyDatasetReference) else ref,
                 return_dtype= infer_dtype_val
             ).alias(col_name)  # Update the column with resolved data
         )
@@ -794,13 +840,19 @@ if __name__ == "__main__":
         col_name = '/scan/apd/data'
         col_name='/scan/instrument/collection/exp_t01'
         #col_name='/scan/data/exp_t01'
-        col_name='human_readable_time'
+        #col_name='human_readable_time'
         
         df_resolved= damaged_folder.resolve_lazy_references_eagerly(df_damaged, col_name)
+        df_resolved2= damaged_folder.resolve_lazy_references_eagerly(damaged_folder.get_dataframe(resolve=False), col_name)
 
         # After applying the transformation, inspect the first row
+        print('\n\n df_resolved is ...')
         print(df_resolved.head())
-
+        print(df_resolved.select(col_name))
+        
+        print('\n\n df_resolved2 is ...')
+        print(df_resolved2.head())
+        print(df_resolved2.select(col_name))     
                 
         print(30*"\N{pineapple}")
         
@@ -816,6 +868,7 @@ if __name__ == "__main__":
         
         # Now, use the resolve_lazy_column function to resolve the column containing LazyDatasetReference
         df_resolved_lazy = damaged_folder.resolve_lazy_column(df_damaged_lazy, col_name)
+        
 
         # To see the result of the resolved column
         print(20*"\N{cucumber}")
@@ -840,7 +893,7 @@ if __name__ == "__main__":
                 print(df_lazy.select(col_name).collect())
         
         # Run function
-        select_and_execute(df_resolved_lazy)
+        #select_and_execute(df_resolved_lazy)
 
        
     # Run the test
