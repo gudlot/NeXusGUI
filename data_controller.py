@@ -33,42 +33,47 @@ class BatchProcessorInterface(ABC):
 class DataController:
     def __init__(
         self, 
-        nxs_meta_df: pl.DataFrame, 
-        fio_meta_df: pl.DataFrame, 
+        nxs_df: pl.LazyFrame, 
+        fio_df: pl.DataFrame, 
         nxs_processor: NeXusBatchProcessor, 
         fio_processor: FioBatchProcessor
     ):
         """Initialise the DataController with metadata and batch processors."""
-        self.nxs_meta_df = nxs_meta_df  # Preloaded Nexus metadata
-        self.fio_meta_df = fio_meta_df  # Preloaded Fio metadata
+        self.nxs_df = nxs_df
+        self.fio_df = fio_df 
         self.nxs_processor = nxs_processor  # Single Nexus batch processor
         self.fio_processor = fio_processor  # Single Fio batch processor
                 
         
-    def get_column_names(self, selected_files: list[str]) -> dict[str, None]:
+    def get_column_names(self, selected_files: list[str]) -> list[str]:
         """
-        Returns a dictionary of column names for the selected files.
+        Returns a list of unique column names from the selected files, preserving order.
+
+        Args:
+            selected_files (list[str]): List of selected filenames.
+
+        Returns:
+            list[str]: Ordered column names from selected `.nxs` and `.fio` files.
         """
-        column_names = {}
+        column_names = []
 
-        if selected_files:
-            nxs_files = [f for f in selected_files if f.endswith(".nxs")]
-            fio_files = [f for f in selected_files if f.endswith(".fio")]
-            
-            print(type(self.nxs_meta_df))
+        if not selected_files:
+            return column_names
 
-            # Extract column names
-            if nxs_files:
-                column_names |= {col: None for col in self.nxs_meta_df.columns}
-                #logger.debug(f"Column names from nxs_df: {list(column_names.keys())}")
+        nxs_selected = any(f.endswith(".nxs") for f in selected_files)
+        fio_selected = any(f.endswith(".fio") for f in selected_files)
 
-            # Extract column names from fio_df (eager)
-            if fio_files:
-                column_names |= {col: None for col in self.fio_meta_df.columns}
-                #logger.debug(f"Column names from fio_df: {list(column_names.keys())}")
+        logger.debug(f"Processing column names for selected files: {selected_files}")
 
+        if nxs_selected:
+            column_names.extend(self.nxs_df.collect_schema().names())  
+
+        if fio_selected:
+            column_names.extend(col for col in self.fio_df.columns if col not in column_names)  # Avoid duplicates
 
         return column_names
+
+
     
     
     def process_selected_files(
@@ -96,7 +101,7 @@ class DataController:
         if not selected_files:
             return pl.DataFrame()  # Return an empty DataFrame if no files are selected
 
-        logger.info(self.nxs_df.limit(5).collect())  # Log the first 5 rows
+        logger.info(self.nxs_df.limit(5))  # Log the first 5 rows
 
         # Separate .nxs and .fio files
         nxs_files = [f for f in selected_files if f.endswith(".nxs")]
@@ -116,13 +121,16 @@ class DataController:
 
             
         # Process .nxs files (lazy)
-        # Process .nxs files (lazy)
         if nxs_files:
             # Identify columns to resolve
             columns_to_resolve = [col for col in (x_column, y_column, z_column) if col]
 
             # Resolve soft links for all selected columns
             resolved_nxs_df = self._resolve_soft_links(self.nxs_df, columns_to_resolve)
+            
+            logger.debug(10*"\N{strawberry}")
+            logger.debug(resolved_nxs_df)
+            logger.debug(10*"\N{strawberry}")
 
             # Now filter and select the required columns
             nxs_data = (
@@ -393,8 +401,11 @@ if __name__ == "__main__":
     
     nxs_metadata_cols = ['filename', 'scan_command', 'scan_id', 'human_start_time']
     
-    nxs_df = nxs_processor.get_dataframe(resolve=True).select(nxs_metadata_cols)
-    print(nxs_df)
+    nxs_df_meta = nxs_processor.get_dataframe(resolve=False).select(nxs_metadata_cols).collect()
+    print(nxs_df_meta)
+    
+    nxs_df = nxs_processor.get_dataframe(resolve=False)
+    
     
     fio_df = fio_processor.get_core_metadata()
     print(fio_df)
@@ -410,6 +421,6 @@ if __name__ == "__main__":
     
     
     column_names = datacon.get_column_names(file_selection)
-    print(column_names)
+    #print(column_names)
     
     #datacon.process_selected_files(file_selection, x_column, y_column)
