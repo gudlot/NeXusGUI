@@ -239,10 +239,10 @@ class FileFilterApp:
     # should be reload
     @staticmethod
     @st.cache_data
-    def load_nxs_files(path: str, force_reload: bool = False):
+    def load_nxs_files(path: str, force_reload: bool = False, resolve: bool = False):
         """Load NeXus files as a lazy dataframe (cached)."""
         processor = NeXusBatchProcessor(path)
-        return processor.get_lazy_dataframe(force_reload=force_reload)
+        return processor.get_lazy_dataframe(force_reload=force_reload, resolve = resolve)
 
     @staticmethod
     @st.cache_data
@@ -299,7 +299,7 @@ class FileFilterApp:
            
         
         # Update the controller
-        self.controller = DataController(self.nxs_df, self.fio_df)
+        self.controller = DataController(self.nxs_df, self.fio_df, self.nxs_processor, self.fio_processor)
 
         
         logger.debug(75 * "\N{T-Rex}")
@@ -335,8 +335,8 @@ class FileFilterApp:
             self._render_right_column()
        
     # Define the callback function to reset the app when the path changes
-    @staticmethod
-    def _on_path_change():
+    #@staticmethod
+    def _on_path_change(self):
         self._reset_app(st.session_state["path_input"])    
         
     @staticmethod    
