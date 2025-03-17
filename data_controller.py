@@ -1,15 +1,48 @@
 import numpy as np
 import polars as pl
 import logging
+from nexus_processing import NeXusBatchProcessor
+from fio_processing import FioBatchProcessor
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import List
+
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
+class BatchProcessorInterface(ABC):
+    """Abstract base class for batch processing of data files."""
+    
+    def __init__(self, file_paths: list[str]):
+        self.file_paths = file_paths  # Store file paths
+
+    @abstractmethod
+    def get_dataframe(self) -> pl.DataFrame | pl.LazyFrame:
+        """Returns a Polars DataFrame (eager) or LazyFrame (lazy)."""
+        pass
+
+    @abstractmethod
+    def select_column(self, col_name: str) -> pl.Series | pl.LazyFrame:
+        """Selects a column from the dataset."""
+        pass
+
+
+
 class DataController:
-    def __init__(self, nxs_df, fio_df):
-        self.nxs_df = nxs_df
-        self.fio_df = fio_df
-        
+    def __init__(
+        self, 
+        nxs_meta_df: pl.DataFrame, 
+        fio_meta_df: pl.DataFrame, 
+        nxs_processor: NeXusBatchProcessor, 
+        fio_processor: FioBatchProcessor
+    ):
+        """Initialise the DataController with metadata and batch processors."""
+        self.nxs_meta_df = nxs_meta_df  # Preloaded Nexus metadata
+        self.fio_meta_df = fio_meta_df  # Preloaded Fio metadata
+        self.nxs_processor = nxs_processor  # Single Nexus batch processor
+        self.fio_processor = fio_processor  # Single Fio batch processor
                 
         
     def get_column_names(self, selected_files: list[str]) -> dict[str, None]:
@@ -21,15 +54,17 @@ class DataController:
         if selected_files:
             nxs_files = [f for f in selected_files if f.endswith(".nxs")]
             fio_files = [f for f in selected_files if f.endswith(".fio")]
+            
+            print(type(self.nxs_meta_df))
 
-            # Extract column names from nxs_df (lazy)
+            # Extract column names
             if nxs_files:
-                column_names |= {col: None for col in self.nxs_df.schema.keys()}
+                column_names |= {col: None for col in self.nxs_meta_df.columns}
                 #logger.debug(f"Column names from nxs_df: {list(column_names.keys())}")
 
             # Extract column names from fio_df (eager)
             if fio_files:
-                column_names |= {col: None for col in self.fio_df.columns}
+                column_names |= {col: None for col in self.fio_meta_df.columns}
                 #logger.debug(f"Column names from fio_df: {list(column_names.keys())}")
 
 
@@ -333,4 +368,48 @@ class DataController:
 
         return df
     
-    if __name__ == "__main__":
+if __name__ == "__main__":
+    
+    
+    def list_files_with_extension(directory: str, extension: str) -> List[str]:
+        """
+        Returns a list of full file paths for files with the given extension in the specified directory.
+        
+        :param directory: Path to the directory to search.
+        :param extension: File extension to filter by (e.g., '.nxs', '.fio').
+        :return: List of full file paths matching the extension.
+        """
+        if not extension.startswith("."):
+            raise ValueError("Extension should start with a dot (e.g., '.nxs', '.fio').")
+        
+        directory_path = Path(directory)
+        
+        return [str(directory_path / file.name) for file in directory_path.glob(f"*{extension}")]
+
+
+    path= "/Users/lotzegud/P08/test_folder2/"
+    nxs_processor = NeXusBatchProcessor(path)
+    fio_processor = FioBatchProcessor(path)
+    
+    nxs_metadata_cols = ['filename', 'scan_command', 'scan_id', 'human_start_time']
+    
+    nxs_df = nxs_processor.get_dataframe(resolve=True).select(nxs_metadata_cols)
+    print(nxs_df)
+    
+    fio_df = fio_processor.get_core_metadata()
+    print(fio_df)
+    
+    datacon=DataController(nxs_df, fio_df, nxs_processor, fio_processor)
+    
+    
+    file_selection = list_files_with_extension(path, '.nxs')
+    print(file_selection)
+    
+    x_column= '/scan/instrument/collection/q'
+    y_column = '/scan/instrument/collection/sth_pos'
+    
+    
+    column_names = datacon.get_column_names(file_selection)
+    print(column_names)
+    
+    #datacon.process_selected_files(file_selection, x_column, y_column)
