@@ -405,7 +405,7 @@ if __name__ == "__main__":
     print(nxs_df_meta)
     
     nxs_df = nxs_processor.get_dataframe(resolve=False)
-    
+    print(nxs_df.select('/scan/data/apd').collect())
     
     fio_df = fio_processor.get_core_metadata()
     print(fio_df)
