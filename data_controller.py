@@ -234,7 +234,7 @@ class DataController:
 
         Args:
             df (pl.LazyFrame): The LazyFrame containing the columns.
-            columns (list[str]): The column names containing the full paths (soft links).
+            columns (list[str]): The column names containing potential soft links.
 
         Returns:
             pl.LazyFrame: The LazyFrame with soft links resolved.
@@ -243,38 +243,54 @@ class DataController:
             # Ensure the column is of string type
             df = df.with_columns(pl.col(column).cast(pl.Utf8))
 
-            # Collect only the soft link column to check for soft links
-            soft_link_values = df.select(pl.col(column)).collect().to_series()
+            # Identify rows that are valid soft links (i.e., start with '/')
+            is_soft_link = pl.col(column).str.starts_with("/")
 
-            # Check if the column contains soft links (e.g., paths starting with '/')
-            if soft_link_values.str.contains(r"^/").any():
-                logger.info(f"Resolving soft links in column: {column}")
-                logger.debug(f"First row of '{column}': {soft_link_values[0]}")
+            # Skip columns where no values start with '/'
+            if not df.select(is_soft_link.any()).fetch(1).item():
+                logger.debug(f"Skipping column '{column}' as it contains no soft links.")
+                continue
 
-                # Check if all row elements in the column are the same
-                unique_values = soft_link_values.unique().to_list()
-                if len(unique_values) == 1:
-                    # All rows point to the same target column
-                    target_column = unique_values[0]
-                    if target_column in df.columns:
-                        logger.debug(f"All rows point to the same target column: {target_column}")
-                        df = df.with_columns(pl.col(target_column).alias(column))
-                    else:
-                        logger.warning(f"Target column '{target_column}' not found in DataFrame.")
-                        df = df.with_columns(pl.lit(None).alias(column))
+            # Extract unique soft link targets (ignoring nulls)
+            unique_targets = (
+                df.filter(is_soft_link)  # Only keep rows where the column starts with '/'
+                .select(pl.col(column).drop_nulls().unique())
+                .fetch(10)  # Fetch at most 10 unique values to limit memory usage
+            )
+
+            # Convert unique targets to a Python list
+            target_paths = unique_targets[column].to_list()
+
+            # If all soft links point to the same target column
+            if len(target_paths) == 1:
+                target_column = target_paths[0]
+
+                if target_column in df.columns:
+                    logger.debug(f"Resolving soft links: All rows in '{column}' point to '{target_column}'")
+                    df = df.with_columns(pl.col(target_column).alias(column))
                 else:
-                    # Rows point to different target columns
-                    logger.debug(f"Rows in column '{column}' point to different target columns. Resolving row by row.")
-                    path_to_value = {
-                        path: pl.col(path) if path in df.columns else pl.lit(None)
-                        for path in unique_values
-                    }
+                    logger.warning(f"Target column '{target_column}' not found. Replacing '{column}' with None.")
+                    df = df.with_columns(pl.lit(None).alias(column))
 
-                    df = df.with_columns(
-                        pl.col(column).map_dict(path_to_value).alias(column)
-                    )
+            else:
+                # Rows have different soft links; resolve row-wise
+                logger.debug(f"Column '{column}' contains different soft links. Resolving individually.")
+
+                # Build mapping only for valid soft link targets
+                path_to_column_map = {
+                    path: pl.col(path) if path in df.columns else pl.lit(None)
+                    for path in target_paths
+                }
+
+                df = df.with_columns(
+                    pl.when(is_soft_link)
+                    .then(pl.col(column).map_dict(path_to_column_map))
+                    .otherwise(pl.col(column))  # Keep original values where not a soft link
+                    .alias(column)
+                )
 
         return df
+
 
     
 
