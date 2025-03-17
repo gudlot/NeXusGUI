@@ -262,7 +262,8 @@ class DataController:
             target_paths = unique_targets[column].to_list()
 
             # If all soft links point to the same target column
-            if len(target_paths) == 1:
+            non_null_targets = [path for path in target_paths if path is not None]
+            if len(non_null_targets) == 1:
                 target_column = target_paths[0]
 
                 if target_column in df.columns:
