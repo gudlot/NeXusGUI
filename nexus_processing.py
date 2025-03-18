@@ -624,20 +624,19 @@ class NeXusBatchProcessor(BaseProcessor):
         
         return self._build_dataframe(resolve=resolve)
 
-
-    @staticmethod
-    def infer_dtype(df: pl.DataFrame | pl.LazyFrame, col: str):
-        """Infer the appropriate Polars dtype based on the first valid dataset reference."""
-                
-        def resolve_dtype(dataset_ref):
-            """Determine dtype from a single dataset reference."""
-            if isinstance(dataset_ref, LazyDatasetReference):
+    @classmethod
+    def resolve_dtype(cls,dataset_ref, is_lazy: bool):
+        """Determine dtype from a single dataset reference."""
+        if isinstance(dataset_ref, LazyDatasetReference):
+            if is_lazy:
+                return dataset_ref  # Preserve LazyDatasetReference for LazyFrame
+            else:
                 data = dataset_ref.load_on_demand()
                 if data is None:
                     return None  # Skip None values
                 
                 if isinstance(data, pl.Series):
-                    return data.dtype  # Use Polars' built-in dtype inference   
+                    return data.dtype  # Use Polars' built-in dtype inference
                 
                 if isinstance(data, list):
                     return pl.List(pl.Float64)  # 1D case
@@ -645,25 +644,32 @@ class NeXusBatchProcessor(BaseProcessor):
                 if isinstance(data, np.ndarray):
                     return pl.Array(pl.Float64, data.shape)  # 2D case
                 
-                
-            elif isinstance(dataset_ref, str):
-                return pl.Utf8
-                
-            elif isinstance(dataset_ref, (int, float)):
-                return pl.Float64 if isinstance(dataset_ref, float) else pl.Int64
+        elif isinstance(dataset_ref, str):
+            return pl.Utf8
 
-            return None  # Default fallback
+        elif isinstance(dataset_ref, (int, float)):
+            return pl.Float64 if isinstance(dataset_ref, float) else pl.Int64
 
+        return None  # Default fallback
+
+
+    @classmethod
+    def infer_dtype(cls, df: pl.DataFrame | pl.LazyFrame, col: str):
+        """Infer the appropriate Polars dtype based on the first valid dataset reference."""
+                
+        is_lazy = isinstance(df, pl.LazyFrame)
+        
+        
         if isinstance(df, pl.DataFrame):
             # Iterate over column values and return the first detected dtype (ignoring None)
             for ref in df[col]:
-                dtype = resolve_dtype(ref)
-                if dtype is not None:  # Skip None values
+                dtype = cls.resolve_dtype(ref, is_lazy)
+                if dtype is not None:
                     return dtype
-
             return pl.Object  # Fallback if no valid type was found
-
-        elif isinstance(df, pl.LazyFrame):
+        
+    
+        elif is_lazy:
             # Collect a small sample of non-null values to determine dtype
             sample_data = (
                 df.select(pl.col(col))
@@ -674,25 +680,16 @@ class NeXusBatchProcessor(BaseProcessor):
             )
 
             logger.debug(f"Sample_data: {sample_data}")
-     
             
             # Apply `resolve_dtype` dynamically
-            dtypes = [resolve_dtype(value) for value in sample_data if value is not None]
+            dtypes = [cls.resolve_dtype(value, is_lazy) for value in sample_data if value is not None]
             detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
             logger.debug(f"Detected dtype: {detected_dtype}")
 
-            return detected_dtype 
-            '''
-            schema = df.collect_schema()
-            #logger.debug(f"Schema is {schema}")
-            
-            detected_dtype = schema[col]
-             '''
             return detected_dtype
-                    
+
         else:
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
-        
         
     def resolve_column(self, df: pl.DataFrame | pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
         """Resolve LazyDatasetReference objects in a column.
