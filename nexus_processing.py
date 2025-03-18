@@ -628,8 +628,7 @@ class NeXusBatchProcessor(BaseProcessor):
     @staticmethod
     def infer_dtype(df: pl.DataFrame | pl.LazyFrame, col: str):
         """Infer the appropriate Polars dtype based on the first valid dataset reference."""
-        
-        
+                
         def resolve_dtype(dataset_ref):
             """Determine dtype from a single dataset reference."""
             if isinstance(dataset_ref, LazyDatasetReference):
