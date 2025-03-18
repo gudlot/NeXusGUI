@@ -647,11 +647,11 @@ class NeXusBatchProcessor(BaseProcessor):
                     return pl.Array(pl.Float64, data.shape)  # 2D case
                 
                 
-                elif isinstance(dataset_ref, str):
-                    return pl.Utf8
+            elif isinstance(dataset_ref, str):
+                return pl.Utf8
                 
-                elif isinstance(dataset_ref, (int, float)):
-                    return pl.Float64 if isinstance(dataset_ref, float) else pl.Int64
+            elif isinstance(dataset_ref, (int, float)):
+                return pl.Float64 if isinstance(dataset_ref, float) else pl.Int64
 
             return None  # Default fallback
 
@@ -674,14 +674,23 @@ class NeXusBatchProcessor(BaseProcessor):
                 .to_series(0)  # Convert to Polars Series
             )
 
-            #logger.debug(f"Sample_data: {sample_data}")
+            logger.debug(f"Sample_data: {sample_data}")
+     
             
             # Apply `resolve_dtype` dynamically
             dtypes = [resolve_dtype(value) for value in sample_data if value is not None]
             detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
+            logger.debug(f"Detected dtype: {detected_dtype}")
 
             return detected_dtype 
-        
+            '''
+            schema = df.collect_schema()
+            #logger.debug(f"Schema is {schema}")
+            
+            detected_dtype = schema[col]
+             '''
+            return detected_dtype
+                    
         else:
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
         
