@@ -25,7 +25,7 @@ class BaseProcessor:
 
         try:
             epoch_times = epoch_reference.load_on_demand()  # Should return a list of floats
-            logging.debug(f"Epoch times {epoch_times}")
+            #logging.debug(f"Epoch times {epoch_times}")
 
             if not isinstance(epoch_times, list):  # Ensure it's a list
                 logging.warning(f"Expected a list of timestamps, but got: {epoch_times}")
