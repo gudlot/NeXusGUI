@@ -122,14 +122,22 @@ class DataController:
             
         # Process .nxs files (lazy)
         if nxs_files:
-            # Identify columns to resolve
-            columns_to_resolve = [col for col in (x_column, y_column, z_column) if col]
 
             # Resolve soft links for all selected columns
-            resolved_nxs_df = self._resolve_soft_links(self.nxs_df, columns_to_resolve)
+            logger.debug(f"Before resolving soft links: {self.nxs_df.collect().height} rows")
+            resolved_nxs_df = self._resolve_soft_links(self.nxs_df, columns)
+            logger.debug(f"After resolving soft links: {resolved_nxs_df.collect().height} rows")
+
+            
+            # Check if resolving soft links resulted in an empty DataFrame
+            if resolved_nxs_df.collect().height == 0:
+                breakpoint()  # or pdb.set_trace()
+                logger.debug("No soft links resolved, using original dataset instead.")
+                resolved_nxs_df = self.nxs_df.select(columns)
             
             logger.debug(10*"\N{strawberry}")
             logger.debug(resolved_nxs_df)
+            logger.debug(resolved_nxs_df.select('/scan/data/apd').collect())
             logger.debug(10*"\N{strawberry}")
 
             # Now filter and select the required columns
@@ -238,37 +246,79 @@ class DataController:
 
         Returns:
             pl.LazyFrame: The LazyFrame with soft links resolved.
+            
         """
+        print(f"Columns is  {columns}")
+        
         for column in columns:
-            # Ensure the column is of string type
-            df = df.with_columns(pl.col(column).cast(pl.Utf8))
-
-            # Identify rows that are valid soft links (i.e., start with '/')
-            is_soft_link = pl.col(column).str.starts_with("/")
-
-            # Skip columns where no values start with '/'
-            if not df.select(is_soft_link.any()).fetch(1).item():
-                logger.debug(f"Skipping column '{column}' as it contains no soft links.")
+            
+            logger.debug(f'\N{hot pepper}\N{hot pepper}\N{hot pepper}Current colum  is {column}')
+            print(df.select(column).collect())
+            
+            # Check if the column exists in DataFrame schema
+            if column not in df.collect_schema().names():
+                logger.warning(f"Skipping '{column}' - column not found in DataFrame schema.")
                 continue
+
+             # Ensure the column is a string type before applying string operations
+            col_type= self.nxs_processor.infer_type(df, column)
+            logger.debug(f"Col_dtype {col_type}")
+            
+            # Ensure the column is a string type and contains at least one soft link
+            if col_type == pl.Utf8 and df.select(pl.col(column).str.starts_with("/").any()).collect().head(1).item():
+                is_soft_link = pl.col(column).str.starts_with("/")
+            else:
+                logger.debug(f"Skipping '{column}' - dtype is {col_type} or it contains no soft links.")
+                continue
+            
+            logger.debug(f'Current colum  is {column}')
 
             # Extract unique soft link targets (ignoring nulls)
             unique_targets = (
                 df.filter(is_soft_link)  # Only keep rows where the column starts with '/'
                 .select(pl.col(column).drop_nulls().unique())
-                .fetch(10)  # Fetch at most 10 unique values to limit memory usage
+                .collect().head(5)  # Fetch at most 5 unique values to limit memory usage
             )
-
+                    
             # Convert unique targets to a Python list
             target_paths = unique_targets[column].to_list()
-
+            
             # If all soft links point to the same target column
             non_null_targets = [path for path in target_paths if path is not None]
             if len(non_null_targets) == 1:
-                target_column = target_paths[0]
+                target_column = non_null_targets[0]
+                
+                logger.debug(f"Column is: {column}")
+                logger.debug(f"Target column is {target_column}")
+                
+                
+                print(df.select(target_column))
+                
+                #print(df.select(pl.col(target_column)).collect())  # See actual values
+                
+                target_type = self.nxs_processor.infer_type(df, target_column)
+                
+                logger.debug(f"Target type {target_type}")
 
-                if target_column in df.columns:
+                if target_column in df.collect_schema().names():
                     logger.debug(f"Resolving soft links: All rows in '{column}' point to '{target_column}'")
-                    df = df.with_columns(pl.col(target_column).alias(column))
+                                       
+                    
+                    df = df.with_columns(
+                        pl.when(is_soft_link & pl.col(target_column).is_not_null())  
+                        .then(pl.col(target_column).cast(pl.Object))  # Ensure the soft link target is Object
+                        .otherwise(pl.col(column).cast(pl.Object))  # Ensure the original column is also Object
+                        .alias(column)  # Overwrite the existing column
+                    )
+                    
+                    df = df.collect() 
+                    print(df.head(5))
+                                        
+                    logger.debug(10*"\N{strawberry} \N{blueberries} ")
+                    logger.debug(f"Updated dtype for '{column}': {df.schema[column]}")
+                               
+                    print(df.select(column).collect())  # Should show LazyDatasetReference where appropriate           
+                    logger.debug(10*"\N{strawberry} \N{banana}")
                 else:
                     logger.warning(f"Target column '{target_column}' not found. Replacing '{column}' with None.")
                     df = df.with_columns(pl.lit(None).alias(column))
@@ -277,18 +327,8 @@ class DataController:
                 # Rows have different soft links; resolve row-wise
                 logger.debug(f"Column '{column}' contains different soft links. Resolving individually.")
 
-                # Build mapping only for valid soft link targets
-                path_to_column_map = {
-                    path: pl.col(path) if path in df.columns else pl.lit(None)
-                    for path in target_paths
-                }
-
-                df = df.with_columns(
-                    pl.when(is_soft_link)
-                    .then(pl.col(column).map_dict(path_to_column_map))
-                    .otherwise(pl.col(column))  # Keep original values where not a soft link
-                    .alias(column)
-                )
+                raise ValueError()
+  
 
         return df
 
@@ -412,7 +452,7 @@ if __name__ == "__main__":
         return [str(directory_path / file.name) for file in directory_path.glob(f"*{extension}")]
 
 
-    path= "/Users/lotzegud/P08/test_folder2/"
+    path= "/Users/lotzegud/P08/healthy2/"
     nxs_processor = NeXusBatchProcessor(path)
     fio_processor = FioBatchProcessor(path)
     
@@ -423,6 +463,7 @@ if __name__ == "__main__":
     
     nxs_df = nxs_processor.get_dataframe(resolve=False)
     print(nxs_df.select('/scan/data/apd').collect())
+    print(nxs_df.select('/scan/apd/data').collect())
     
     fio_df = fio_processor.get_core_metadata()
     print(fio_df)
@@ -434,10 +475,11 @@ if __name__ == "__main__":
     print(file_selection)
     
     x_column= '/scan/instrument/collection/q'
+    x_column= '/scan/data/apd'
     y_column = '/scan/instrument/collection/sth_pos'
     
     
     column_names = datacon.get_column_names(file_selection)
     #print(column_names)
     
-    #datacon.process_selected_files(file_selection, x_column, y_column)
+    datacon.process_selected_files(file_selection, x_column, y_column)

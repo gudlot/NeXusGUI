@@ -625,11 +625,14 @@ class NeXusBatchProcessor(BaseProcessor):
         return self._build_dataframe(resolve=resolve)
 
     @classmethod
-    def resolve_dtype(cls,dataset_ref, is_lazy: bool):
+    def resolve_type(cls,dataset_ref, is_lazy: bool):
         """Determine dtype from a single dataset reference."""
         if isinstance(dataset_ref, LazyDatasetReference):
+            print('This is the type of the dataset_ref')
+            print(type(dataset_ref))
+            
             if is_lazy:
-                return dataset_ref  # Preserve LazyDatasetReference for LazyFrame
+                return dataset_ref # Preserve LazyDatasetReference for LazyFrame
             else:
                 data = dataset_ref.load_on_demand()
                 if data is None:
@@ -654,7 +657,7 @@ class NeXusBatchProcessor(BaseProcessor):
 
 
     @classmethod
-    def infer_dtype(cls, df: pl.DataFrame | pl.LazyFrame, col: str):
+    def infer_type(cls, df: pl.DataFrame | pl.LazyFrame, col: str):
         """Infer the appropriate Polars dtype based on the first valid dataset reference."""
                 
         is_lazy = isinstance(df, pl.LazyFrame)
@@ -663,7 +666,7 @@ class NeXusBatchProcessor(BaseProcessor):
         if isinstance(df, pl.DataFrame):
             # Iterate over column values and return the first detected dtype (ignoring None)
             for ref in df[col]:
-                dtype = cls.resolve_dtype(ref, is_lazy)
+                dtype = cls.resolve_type(ref, is_lazy)
                 if dtype is not None:
                     return dtype
             return pl.Object  # Fallback if no valid type was found
@@ -679,12 +682,12 @@ class NeXusBatchProcessor(BaseProcessor):
                 .to_series(0)  # Convert to Polars Series
             )
 
-            logger.debug(f"Sample_data: {sample_data}")
+            #logger.debug(f"Sample_data: {sample_data}")
             
-            # Apply `resolve_dtype` dynamically
-            dtypes = [cls.resolve_dtype(value, is_lazy) for value in sample_data if value is not None]
+            # Apply `resolve_type` dynamically
+            dtypes = [cls.resolve_type(value, is_lazy) for value in sample_data if value is not None]
             detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
-            logger.debug(f"Detected dtype: {detected_dtype}")
+            #logger.debug(f"Detected dtype: {detected_dtype}")
 
             return detected_dtype
 
@@ -716,12 +719,12 @@ class NeXusBatchProcessor(BaseProcessor):
             return value  # Other values remain unchanged
 
         # Infer return dtype
-        infer_dtype_val = self.infer_dtype(df, col_name)
+        infer_type_val = self.infer_type(df, col_name)
         
         
         
         logger.debug(10* "\N{green apple}")
-        print(f"Inferred dtype: { infer_dtype_val}")
+        print(f"Inferred dtype: { infer_type_val}")
         logger.debug(f"DataFrame type: {type(df)}")
         #logger.debug(f" Schema: {df.schema}")
         logger.debug(10* "\N{green apple}")
@@ -730,14 +733,14 @@ class NeXusBatchProcessor(BaseProcessor):
         if isinstance(df, pl.DataFrame) or eager:
             # Resolve eagerly
             return df.with_columns(
-                pl.col(col_name).map_elements(resolve_value, return_dtype=infer_dtype_val).alias(col_name)
+                pl.col(col_name).map_elements(resolve_value, return_dtype=infer_type_val).alias(col_name)
             )
 
         # Keep lazy references if eager=False
         return df.with_columns(
             pl.col(col_name).map_batches(
                 lambda batch: pl.Series([resolve_value(val) for val in batch]),
-                return_dtype=infer_dtype_val
+                return_dtype=infer_type_val
             ).alias(col_name)
         ) if isinstance(df, pl.LazyFrame) else df
 
