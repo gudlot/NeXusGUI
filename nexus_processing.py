@@ -220,7 +220,7 @@ class NeXusProcessor:
                     dataset_name=dataset_name
                 )
                 
-                value = {"lazy": lazy_reference}  # Store the reference instead of lambda function
+                value = {"lazy": lazy_reference}  # Store the reference
                         
             else:
                 logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
@@ -635,7 +635,7 @@ class NeXusBatchProcessor(BaseProcessor):
         else:
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
         
-    def resolve_column(self, df: pl.LazyFrame, col_name: str) -> pl.DataFrame | pl.LazyFrame:
+    def resolve_column(self, df: pl.LazyFrame, col_name: str) -> pl.LazyFrame:
         """
         Resolves a specified column in a Polars LazyFrame by validating its existence, 
         inferring its data type, and resolves LazyDatasetReference objects if present.
@@ -660,33 +660,47 @@ class NeXusBatchProcessor(BaseProcessor):
             if isinstance(value, LazyDatasetReference):
                 return value.load_on_demand()  # Resolve if needed
             return value  # Other values remain unchanged
-
-        # Infer return dtype
-        infer_type_val = self.infer_type(df, col_name)
-              
-        
+                    
         logger.debug(10* "\N{green apple}")
-        print(f"Inferred dtype: {infer_type_val}")
         logger.debug(f"DataFrame type: {type(df)}")
         logger.debug(10* "\N{green apple}")
         
-        if isinstance(df, pl.LazyFrame):
-            # Sample a small subset of the column (limit 10, drop None)
-            sample_values = (
+        # Sample a small subset of the column (limit 10, drop None)
+        sample_values = (
                 df.select(pl.col(col_name))
                 .limit(10)  # Small subset to inspect
                 .drop_nulls()  # Remove None values
                 .collect()
-            )
+        )
+        # Log the type of sample_values
+        logger.debug(f"Type of sample_values: {type(sample_values)}")
+        
+        # Log dtype of the column (Polars interpretation)
+        logger.debug(f"Dtype of sample_values[{col_name}]: {sample_values[col_name].dtype}")
 
-            # Check if any of the sampled values are LazyDatasetReference
-            contains_lazy_refs = any(isinstance(v, LazyDatasetReference) for v in sample_values[col_name])
+        # Log unique element types in the column
+        element_types = {type(v) for v in sample_values[col_name]}
+        logger.debug(f"Unique element types in sample_values[{col_name}]: {element_types}")
 
-            return df.with_columns(
+        # Check if column contains LazyDatasetReference
+        contains_lazy_refs = LazyDatasetReference in element_types
+
+        # If LazyDatasetReference objects exist, resolve and check actual types
+        resolved_types = set()
+        if contains_lazy_refs:
+            resolved_types = {type(v.load_on_demand() if isinstance(v, LazyDatasetReference) else v) for v in sample_values[col_name]}
+            logger.debug(f"Resolved element types in sample_values[{col_name}]: {resolved_types}")
+
+        # Infer return dtype based on resolved values
+        resolved_type = resolved_types.pop() if len(resolved_types) == 1 else pl.Object
+        logger.debug(f"Resolved type in sample_values[{col_name}]: {resolved_type}")
+
+
+        return df.with_columns(
                 pl.col(col_name)
                 .map_elements(
                     lambda ref: resolve_value(ref),
-                    return_dtype=pl.Object if contains_lazy_refs else infer_type_val
+                    return_dtype=pl.Object if contains_lazy_refs else resolved_type
                 )
                 .alias(col_name)
             )
@@ -720,11 +734,15 @@ if __name__ == "__main__":
         
         print(30*"\N{pineapple}")
         
-        col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
-        col_name = '/scan/apd/data'
-        col_name='/scan/instrument/collection/exp_t01'
+        #col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
+        #col_name = '/scan/apd/data'
+        #col_name='/scan/instrument/collection/exp_t01'
+        #col_name='/scan/bpm1/attenuator/foilpos'
         #col_name='/scan/data/exp_t01'
         #col_name='human_readable_time'
+        #col_name='/scan/end_time'
+        #col_name='/scan/instrument/atten/attenuator_transmission'
+        col_name='/scan/instrument/dcm/energy'
         
         df_resolved= damaged_folder.resolve_column(df_damaged, col_name)
       
@@ -747,14 +765,14 @@ if __name__ == "__main__":
         print("\N{banana}\N{banana}\N{banana}")
         
         # Now, use the resolve_lazy_column function to resolve the column containing LazyDatasetReference
-        df_resolved_lazy = damaged_folder.resolve_column(df_damaged_lazy, col_name, eager=False)
+        df_resolved_lazy = damaged_folder.resolve_column(df_damaged_lazy, col_name)
         
 
         # To see the result of the resolved column
         print(20*"\N{cucumber}")
         print("\N{rainbow}\N{rainbow}\N{rainbow} Resolved DataFrame:")
         print(df_resolved_lazy)
-        print('Type of df: ', type(df_resolved_lazy))
+        print('Type of df: ', type(df_resolved_lazy.select(col_name)))
         print(20*"\N{cucumber}")
         
         print(df_resolved_lazy.select(col_name).collect())
@@ -773,7 +791,7 @@ if __name__ == "__main__":
                 print(df_lazy.select(col_name).collect())
         
         # Run function
-        select_and_execute(df_resolved_lazy)
+        #select_and_execute(df_resolved_lazy)
 
        
     # Run the test
