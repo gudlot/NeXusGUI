@@ -596,44 +596,6 @@ class NeXusBatchProcessor(BaseProcessor):
 
         return None  # Default fallback
 
-
-    @classmethod
-    def infer_type(cls, df: pl.DataFrame | pl.LazyFrame, col: str):
-        """Infer the appropriate Polars dtype based on the first valid dataset reference."""
-                
-        is_lazy = isinstance(df, pl.LazyFrame)
-        
-        
-        if isinstance(df, pl.DataFrame):
-            # Iterate over column values and return the first detected dtype (ignoring None)
-            for ref in df[col]:
-                dtype = cls.resolve_type(ref, is_lazy)
-                if dtype is not None:
-                    return dtype
-            return pl.Object  # Fallback if no valid type was found
-        
-    
-        elif is_lazy:
-            # Collect a small sample of non-null values to determine dtype
-            sample_data = (
-                df.select(pl.col(col))
-                .drop_nulls()
-                .limit(10)
-                .collect()
-                .to_series(0)  # Convert to Polars Series
-            )
-
-            #logger.debug(f"Sample_data: {sample_data}")
-            
-            # Apply `resolve_type` dynamically
-            dtypes = [cls.resolve_type(value, is_lazy) for value in sample_data if value is not None]
-            detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
-            #logger.debug(f"Detected dtype: {detected_dtype}")
-
-            return detected_dtype
-
-        else:
-            raise TypeError("df must be a Polars DataFrame or LazyFrame")
         
     def resolve_column(self, df: pl.LazyFrame, col_name: str) -> pl.LazyFrame:
         """
