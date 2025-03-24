@@ -9,6 +9,7 @@ from base_processing import BaseProcessor
 from collections import defaultdict
 from dataclasses import dataclass
 from lazy_dataset import LazyDatasetReference
+from icecream import ic
 
 
 
@@ -623,9 +624,7 @@ class NeXusBatchProcessor(BaseProcessor):
                 return value.load_on_demand()  # Resolve if needed
             return value  # Other values remain unchanged
                     
-        logger.debug(30* "\N{green apple}")
-        logger.debug(f"DataFrame type: {type(df)}")
-                
+                        
         # Sample a small subset of the column (limit 10, drop None)
         df_subset = (
                 df.select(pl.col(col_name))
@@ -633,79 +632,49 @@ class NeXusBatchProcessor(BaseProcessor):
                 .drop_nulls()  # Remove None values
                 .collect()
         )
-        # Log the type of df_subset
-        logger.debug(f"df_subset is \n")
-        logger.debug(df_subset)  
         
-        logger.debug(f"Type of df_subset: {type(df_subset)}")
-        
-        # Log dtype of the column (Polars interpretation)
-        logger.debug(f"Dtype of df_subset[{col_name}]: {df_subset[col_name].dtype}")
+        logger.debug(30* "\N{green apple}")
+        ic(df_subset, type(df_subset), df_subset[col_name].dtype)
+      
+        # Determine unique element types, resolving LazyDatasetReference if present
+        element_types = {
+            type(getattr(v, "load_on_demand", lambda: v)()) for v in df_subset[col_name]
+        }
+        ic(element_types)
 
-        # Log unique element types in the column
-        element_types = {type(v) for v in df_subset[col_name]}
-        logger.debug(f"Unique element types in df_subset[{col_name}]: {element_types}")
-
-        # Check if column contains LazyDatasetReference
-        contains_lazy_refs = LazyDatasetReference in element_types
-
-        # If LazyDatasetReference objects exist, resolve and check actual types
-        if contains_lazy_refs:
-            resolved_types = {
-                type(v.load_on_demand() if isinstance(v, LazyDatasetReference) else v)
-                for v in df_subset[col_name]
-            }
-            logger.debug(f"Resolved element types in df_subset[{col_name}]: {resolved_types}")
-        else:
-            resolved_types = {type(v) for v in df_subset[col_name]}  # Use existing types if no LazyDatasetReference
-
-        # Ensure resolved_types is not empty before accessing elements
-        if resolved_types:
-            if len(resolved_types) == 1:
-                resolved_type = next(iter(resolved_types))  # Extract the single type
-            else:
-                resolved_type = object  # Mixed types, fallback to `object`
-        else:
-            resolved_type = object  # Default if no valid values
+        # Resolve column type
+        resolved_type = next(iter(element_types), object) if len(element_types) == 1 else object
 
         # Map resolved Python type to Polars dtype
-        if resolved_type is str:
-            polars_dtype = pl.Utf8
-        elif resolved_type is int:
-            polars_dtype = pl.Int64
-        elif resolved_type is float:
-            polars_dtype = pl.Float64
-        elif resolved_type is LazyDatasetReference:
-            polars_dtype =pl.Object
-        #TODO Think about how to extraxct the datasets, store them in a series for all rows, and combine to a final df
-        elif resolved_type is np.ndarray: 
-            polars_dtype= pl.Object
-        else:
+        polars_dtype = {
+            str: pl.Utf8,
+            int: pl.Int64,
+            float: pl.Float64,
+            LazyDatasetReference: pl.Object,
+            np.ndarray: pl.Object,  # TODO: Consider extracting datasets into a Series, i.e create multiple pl.Series over rows and combine in the end to a polars dt
+        }.get(resolved_type, None)
+
+        if polars_dtype is None:
             raise NotImplementedError(f"Unhandled type: {resolved_type} ({type(resolved_type)})")
 
-            
-            
-        logger.debug(f"Resolved Python type in df_subset[{col_name}]: {resolved_type}")
-        logger.debug(f"Final inferred Polars dtype: {polars_dtype}")
+        ic(resolved_type, polars_dtype)
         logger.debug(30 * "\N{green apple}")
 
-                
+        # Apply transformation
         return df.with_columns(
-                pl.col(col_name)
-                .map_elements(
-                    lambda ref: resolve_value(ref),
-                    return_dtype=pl.Object if contains_lazy_refs else polars_dtype
-                )
-                .alias(col_name)
+            pl.col(col_name)
+            .map_elements(
+                lambda ref: resolve_value(ref),
+                return_dtype=pl.Object if LazyDatasetReference in element_types else polars_dtype
             )
-            
+            .alias(col_name)
+        )
         
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
         self.process_files(force_reload)
         return self.structure_list
     
-
 
 if __name__ == "__main__":
       
@@ -766,7 +735,7 @@ if __name__ == "__main__":
         # To see the result of the resolved column
         print(20*"\N{cucumber}")
         print("\N{rainbow}\N{rainbow}\N{rainbow} Resolved DataFrame:")
-        print(df_resolved_col)
+        print(df_resolved_col.explain(optimized=True))
         print('Type of df: ', type(df_resolved_col.select(col_name)))
         print(20*"\N{cucumber}")
         print("Eagerly loading of selected column now ...")
