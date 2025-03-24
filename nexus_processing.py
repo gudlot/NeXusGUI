@@ -635,23 +635,25 @@ class NeXusBatchProcessor(BaseProcessor):
         else:
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
         
-    def resolve_column(self, df: pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
-        """Resolve LazyDatasetReference objects in a column.
+    def resolve_column(self, df: pl.LazyFrame, col_name: str) -> pl.DataFrame | pl.LazyFrame:
+        """
+        Resolves a specified column in a Polars LazyFrame by validating its existence, 
+        inferring its data type, and resolves LazyDatasetReference objects if present.
 
-        - If `eager=True`, force resolves `LazyDatasetReference` objects, even in LazyFrames.
-        - If `eager=False`, keeps references for lazy resolution.
+        Args:
+            df (pl.LazyFrame): The input LazyFrame.
+            col_name (str): The name of the column to resolve.
 
-        When calling `.collect()` on a LazyFrame, ensure `eager=True` is used to resolve data.
+        Returns:
+            pl.LazyFrame: The modified LazyFrame with resolved column values.
+        
+        Raises:
+            ValueError: If the specified column is not found in the dataframe.
         """
         # Validate column existence
-        if isinstance(df, pl.LazyFrame):
-            schema_names = df.collect_schema().names()
-            if col_name not in schema_names:
-                raise ValueError(f"Column '{col_name}' not found in LazyFrame schema.")
-        elif isinstance(df, pl.DataFrame):
-            if col_name not in df.columns:
-                raise ValueError(f"Column '{col_name}' not found in DataFrame.")
-
+        schema_names = df.collect_schema().names()
+        if col_name not in schema_names:
+            raise ValueError(f"Column '{col_name}' not found in LazyFrame schema.")
 
         def resolve_value(value: Any) -> Any:
             """Resolves LazyDatasetReference objects eagerly if needed."""
