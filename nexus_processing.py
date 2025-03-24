@@ -586,10 +586,13 @@ class NeXusBatchProcessor(BaseProcessor):
                 {k: process_value(v, k) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
             ])
+                        
+            
             
             #This confirms the result is a realy pl.lazyframe
             logger.debug(10* "\N{red apple}")
             logger.debug(f"{type(self._df)}")
+            logger.debug(f"self._df.schema")
             logger.debug(f"{self._df.explain(optimized=True)}")
             logger.debug(10* "\N{red apple}")
         
@@ -726,7 +729,6 @@ class NeXusBatchProcessor(BaseProcessor):
         logger.debug(10* "\N{green apple}")
         print(f"Inferred dtype: { infer_type_val}")
         logger.debug(f"DataFrame type: {type(df)}")
-        #logger.debug(f" Schema: {df.schema}")
         logger.debug(10* "\N{green apple}")
         
 
