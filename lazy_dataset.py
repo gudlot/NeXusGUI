@@ -22,13 +22,13 @@ class LazyDatasetReference:
             if data.ndim == 1:
                 if data.size == 0:
                     return None  # Empty 1D array should return None
-                return data.tolist()  # Will be stored as pl.List(pl.Float64)
-
+                return data
+                
             elif data.ndim == 2:
                 # Handle empty 2D arrays with zero elements
                 if data.shape[0] == 0 or data.shape[1] == 0:
                     return None  # 2D array with 0 rows or 0 columns is treated as None
-                return data  # Will be stored as pl.Array(shape, pl.Float64)
+                return data 
 
             else:
                 raise ValueError(f"Unexpected shape {data.shape} in dataset {self.dataset_name}")
