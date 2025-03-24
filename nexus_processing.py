@@ -536,7 +536,7 @@ class NeXusBatchProcessor(BaseProcessor):
             # Validate the resulting LazyFrame
             logger.debug("\N{red apple}" * 10)
             logger.debug(f"LazyFrame created: {type(self._df)}")
-            logger.debug(f"Schema: {self._df.schema}")
+            logger.debug(f"Schema: {self._df.collect_schema()}")
             logger.debug(f"Optimized plan:\n{self._df.explain(optimized=True)}")
             logger.debug("\N{red apple}" * 10)
 
@@ -635,7 +635,7 @@ class NeXusBatchProcessor(BaseProcessor):
         else:
             raise TypeError("df must be a Polars DataFrame or LazyFrame")
         
-    def resolve_column(self, df: pl.DataFrame | pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
+    def resolve_column(self, df: pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
         """Resolve LazyDatasetReference objects in a column.
 
         - If `eager=True`, force resolves `LazyDatasetReference` objects, even in LazyFrames.
@@ -661,29 +661,34 @@ class NeXusBatchProcessor(BaseProcessor):
 
         # Infer return dtype
         infer_type_val = self.infer_type(df, col_name)
-        
-        
+              
         
         logger.debug(10* "\N{green apple}")
-        print(f"Inferred dtype: { infer_type_val}")
+        print(f"Inferred dtype: {infer_type_val}")
         logger.debug(f"DataFrame type: {type(df)}")
         logger.debug(10* "\N{green apple}")
         
-
-        if isinstance(df, pl.DataFrame) or eager:
-            # Resolve eagerly
-            return df.with_columns(
-                pl.col(col_name).map_elements(resolve_value, return_dtype=infer_type_val).alias(col_name)
+        if isinstance(df, pl.LazyFrame):
+            # Sample a small subset of the column (limit 10, drop None)
+            sample_values = (
+                df.select(pl.col(col_name))
+                .limit(10)  # Small subset to inspect
+                .drop_nulls()  # Remove None values
+                .collect()
             )
 
-        # Keep lazy references if eager=False
-        return df.with_columns(
-            pl.col(col_name).map_batches(
-                lambda batch: pl.Series([resolve_value(val) for val in batch]),
-                return_dtype=infer_type_val
-            ).alias(col_name)
-        ) if isinstance(df, pl.LazyFrame) else df
+            # Check if any of the sampled values are LazyDatasetReference
+            contains_lazy_refs = any(isinstance(v, LazyDatasetReference) for v in sample_values[col_name])
 
+            return df.with_columns(
+                pl.col(col_name)
+                .map_elements(
+                    lambda ref: resolve_value(ref),
+                    return_dtype=pl.Object if contains_lazy_refs else infer_type_val
+                )
+                .alias(col_name)
+            )
+            
         
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
@@ -704,8 +709,8 @@ if __name__ == "__main__":
         
         
         # Get the DataFrame with regular data (processed files)
-        df_damaged = damaged_folder.get_dataframe(resolve=True)
-        print("Regular DataFrame (df_damaged):")
+        df_damaged = damaged_folder.get_dataframe()
+        print("DataFrame (df_damaged):")
         print(type(df_damaged))
         
         
@@ -720,17 +725,13 @@ if __name__ == "__main__":
         #col_name='human_readable_time'
         
         df_resolved= damaged_folder.resolve_column(df_damaged, col_name)
-        df_resolved2= damaged_folder.resolve_column(damaged_folder.get_dataframe(resolve=False), col_name, eager=False)
-
+      
         # After applying the transformation, inspect the first row
         print('\n\n df_resolved is ...')
         print(df_resolved.head())
         print(df_resolved.select(col_name))
         
-        print('\n\n df_resolved2 is ...')
-        print(df_resolved2.head())
-        print(df_resolved2.select(col_name))     
-                
+                      
         print(30*"\N{pineapple}")
         
         # Get the DataFrame with lazy-loaded data (evaluated columns)
@@ -770,14 +771,11 @@ if __name__ == "__main__":
                 print(df_lazy.select(col_name).collect())
         
         # Run function
-        #select_and_execute(df_resolved_lazy)
+        select_and_execute(df_resolved_lazy)
 
        
     # Run the test
     test_broken()
-
-
-
     
     def test_raw():
         file_path=Path("/Users/lotzegud/P08/11019623/raw")
