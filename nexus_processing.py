@@ -511,98 +511,44 @@ class NeXusBatchProcessor(BaseProcessor):
             print("  No type inconsistencies found.")
 
 
-    @staticmethod
-    def _resolve_lazy_value(value: Dict[str, Any], key: str) -> Any:
-        """Resolves a lazy dataset reference or function if required.
-        
-        Args:
-            value (Dict[str, Any]): Dictionary containing "lazy" or "source" keys.
-            key (str): The key corresponding to this value in the dataset.
-        
-        Returns:
-            Any: The resolved dataset, reference, or None if resolution fails.
-        """
-        lazy_ref = value.get("lazy")
-        
-        if lazy_ref is None:
-            return value.get("source")  # Return source reference if present
+    
 
-        try:
-            if isinstance(lazy_ref, LazyDatasetReference):
-                return lazy_ref.load_on_demand()  # Resolve LazyDatasetReference
-            if callable(lazy_ref):
-                return lazy_ref()  # Call function to resolve dataset
-            return lazy_ref  # Return as-is if it's neither callable nor a LazyDatasetReference
-        except Exception as e:
-            logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
-            return None  # Return None if resolution fails
-
-    @staticmethod
-    def _process_normal_value(value: Any, key: str) -> Any:
-        """Validates and processes non-lazy values.
-
-        Args:
-            value (Any): The value to process.
-            key (str): The key corresponding to this value.
+    def _build_dataframe(self) -> pl.LazyFrame:
+        """Constructs a Polars LazyFrame from processed files.
 
         Returns:
-            Any: The validated and processed value.
-
-        Raises:
-            ValueError: If an invalid type is encountered.
+            pl.LazyFrame: The constructed LazyFrame.
         """
-        if isinstance(value, (float, int, str, type(None), list, pl.Series)):
-            return value  # Return valid types directly
-
-        raise ValueError(
-            f"Inconsistent type for key '{key}': Expected float, int, str, list, or None, got {type(value)}"
-        )
-
-    def _build_dataframe(self, resolve: bool = False) -> pl.LazyFrame | pl.DataFrame:
-        """Constructs a Polars DataFrame from processed files.
-
-        Args:
-            resolve (bool): Whether to resolve lazy dataset references.
-
-        Returns:
-            pl.DataFrame: The constructed Polars DataFrame.
-        """
-        def process_value(value: Any, key: str) -> Any:
-            """Processes each value in the dataset, resolving laziness if needed."""
-            
-            #logger.debug(f"\N{hot pepper}Key {key}")
-            #logger.debug(f"\N{green apple}Value {value}")
-            
-            
+        def process_value(value: Any) -> Any:
+            """Processes individual dataset values."""
             if isinstance(value, dict):
-                return self._resolve_lazy_value(value, key) if resolve else value.get("lazy", value.get("source"))
-            return self._process_normal_value(value, key)
+                return value.get("lazy", value.get("source"))  # Prioritise "lazy", fallback to "source", else None
+
+            if isinstance(value, (float, int, str, type(None), list, pl.Series)):
+                return value  # Return supported types directly
+
+            raise ValueError(f"Unsupported type {type(value)} in dataset")
 
         try:
-                    
-            #TODO: Check what is better later. Both options work here, but one returns a DataFrame, the other imho a LazyFrame.   
-            #df=pl.DataFrame([        
-            self._df =  pl.LazyFrame([
-                {k: process_value(v, k) for k, v in file_data.items()}
+            # Construct LazyFrame from processed files
+            self._df = pl.LazyFrame([
+                {k: process_value(v) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
             ])
-                        
-            
-            
-            #This confirms the result is a realy pl.lazyframe
-            logger.debug(10* "\N{red apple}")
-            logger.debug(f"{type(self._df)}")
-            logger.debug(f"self._df.schema")
-            logger.debug(f"{self._df.explain(optimized=True)}")
-            logger.debug(10* "\N{red apple}")
-        
-            
-            return self._df.collect() if resolve else self._df  # Collect if resolving          
-        except ValueError as e:
-            logging.error(f"Error building DataFrame: {e}")
-            raise  # Re-raise for debugging
-        
-        
+
+            # Validate the resulting LazyFrame
+            logger.debug("\N{red apple}" * 10)
+            logger.debug(f"LazyFrame created: {type(self._df)}")
+            logger.debug(f"Schema: {self._df.schema}")
+            logger.debug(f"Optimized plan:\n{self._df.explain(optimized=True)}")
+            logger.debug("\N{red apple}" * 10)
+
+            return self._df
+
+        except Exception as e:
+            logger.error(f"Failed to build LazyFrame: {e}", exc_info=True)
+            raise  # Preserve stack trace for debugging
+
 
 
     def get_dataframe(self, force_reload: bool = False, resolve: bool = False) -> Union[pl.LazyFrame, pl.DataFrame]:
