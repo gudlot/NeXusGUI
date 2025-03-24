@@ -4,6 +4,7 @@ import logging
 from pathlib import Path 
 from typing import Optional, Union
 from lazy_dataset import LazyDatasetReference
+import numpy as np
 
 class BaseProcessor:
     def __init__(self):
@@ -25,15 +26,17 @@ class BaseProcessor:
 
         try:
             epoch_times = epoch_reference.load_on_demand()  # Should return a list of floats
-            #logging.debug(f"Epoch times {epoch_times}")
+            logging.debug(f"Epoch times {epoch_times}")
+            logging.debug(f"{type(epoch_times)}")
 
-            if not isinstance(epoch_times, list):  # Ensure it's a list
-                logging.warning(f"Expected a list of timestamps, but got: {epoch_times}")
-                return None
+            # Ensure epoch_times is an ndarray
+            if not isinstance(epoch_times, np.ndarray):
+                raise TypeError(f"Expected a numpy.ndarray of timestamps, but got: {type(epoch_times)}")
 
-            # Convert float seconds to integer nanoseconds
-            epoch_ns = [int(t * 1_000_000_000) for t in epoch_times]
+            # Convert float seconds to integer nanoseconds using NumPy
+            epoch_ns = (epoch_times * 1_000_000_000).astype(np.int64)
 
+            # Return as a Polars Series with nanosecond precision
             return pl.Series("human_readable_time", epoch_ns, dtype=pl.Datetime("ns"))
 
         except (ValueError, TypeError) as e:
