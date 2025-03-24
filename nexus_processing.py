@@ -428,7 +428,7 @@ class NeXusBatchProcessor(BaseProcessor):
         
         # Store lazy references and soft links properly in `_df`**
         if self.processed_files:
-            self._df = self._build_dataframe(resolve=False)  # Keep lazy references
+            self._df = self._build_dataframe()  
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return a LazyFrame containing only filename, scan_id, scan_command, and human_start_time."""
@@ -508,10 +508,7 @@ class NeXusBatchProcessor(BaseProcessor):
                         print(f"    - Shapes: {', '.join(str(shape) for shape in key_shapes[key])} are inconsistent across files")
 
         if not found_inconsistencies:
-            print("  No type inconsistencies found.")
-
-
-    
+            print("  No type inconsistencies found.")    
 
     def _build_dataframe(self) -> pl.LazyFrame:
         """Constructs a Polars LazyFrame from processed files.
@@ -551,27 +548,22 @@ class NeXusBatchProcessor(BaseProcessor):
 
 
 
-    def get_dataframe(self, force_reload: bool = False, resolve: bool = False) -> Union[pl.LazyFrame, pl.DataFrame]:
-        
-        """Return the processed data as either a lazy Polars DataFrame or an eagerly evaluated one.
+    def get_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
+        """Return the processed data as a Polars LazyFrame.
 
         Args:
-            force_reload (bool): Whether to reload files before building the DataFrame.
-            resolve (bool): Whether to return an eagerly evaluated `pl.DataFrame` (default: True).
+            force_reload (bool): If True, reloads files and rebuilds the LazyFrame.
 
         Returns:
-            Union[pl.LazyFrame, pl.DataFrame]: A Polars LazyFrame (if resolve=False) or DataFrame (if resolve=True).
-            
-        df_lazy = obj.get_dataframe(resolve=False)  # Returns a LazyFrame
-        df_eager = obj.get_dataframe(resolve=True)  # Returns a DataFrame
+            pl.LazyFrame: The processed data as a LazyFrame.
         """
-        
-        self.process_files(force_reload)
+        # Reprocess files if necessary
+        if force_reload or self._df is None:
+            self.process_files(force_reload)
+            self._df = self._build_dataframe()
 
-        if self._df is not None:
-            return self._df.collect() if resolve and isinstance(self._df, pl.LazyFrame) else self._df
-        
-        return self._build_dataframe(resolve=resolve)
+        return self._df
+
 
     @classmethod
     def resolve_type(cls,dataset_ref, is_lazy: bool):
