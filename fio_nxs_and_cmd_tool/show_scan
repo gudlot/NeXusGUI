@@ -1,0 +1,164 @@
+#!/usr/bin/env python
+
+#show scans in folder
+
+import glob
+import os, sys
+from fio_reader import read as fio_read
+import numpy as np
+import argparse
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
+#print(range(len(sys.argv)))
+
+pattern = '*'
+
+time_sort = False
+reverse_sort = False
+plot_data = False
+log_scale = False
+
+scan_mode = 'none'
+motor_pos = 'none'
+scan_type = 'none'
+column_value = 'none'
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-p", "--pattern", help="search file pattern")
+parser.add_argument("-m", "--scan_mode", "--scan-mode", help="scan mode, e.g. alignment, measurement, ...")
+parser.add_argument("-s", "--scan_type", "--scan-type", help="scan type, e.g. gscan, ascan, timescan, ...")
+parser.add_argument("--motor_position", "--motor-position", help="position of motors in scan")
+parser.add_argument("--column", help="show average of data column. NaN if column not available")
+parser.add_argument("--plot", action="store_true", help="plot data")
+parser.add_argument("--log", action="store_true", help="logscale plot")
+parser.add_argument("-t", action="store_true", help="sort by time")
+parser.add_argument("-r", action="store_true", help="reverse sort")
+
+args = parser.parse_args()
+
+if not args.pattern is None:
+    pattern = args.pattern
+if not args.scan_mode is None:
+    scan_mode = args.scan_mode
+if not args.scan_type is None:
+    scan_type = args.scan_type
+if not args.motor_position is None:
+    motor_pos = args.motor_position
+if not args.column is None:
+    column_value = args.column
+plot_data = args.plot
+log_scale = args.log
+time_sort = args.t
+reverse_sort = args.r
+
+            
+if plot_data:
+    import matplotlib.pyplot as plt
+    
+    x_vals = []
+    y_vals = []
+        
+
+if pattern.find('.fio') > -1:
+    glob_pattern = pattern
+else:
+    glob_pattern = '*%s*.fio' % pattern
+    
+files = glob.glob(glob_pattern)
+
+if time_sort:
+    files.sort(key=os.path.getmtime,reverse=reverse_sort)
+else:
+    files.sort(reverse=reverse_sort)
+
+for name in files:
+        
+    motor_positions, column_names, data, header_info = fio_read(name, header_only=(column_value == 'none' and (not len(files)==1)) )
+                    
+    cmd = header_info["scan_cmd"]
+    
+    if not cmd is None:
+        spl = cmd.split()
+    else:
+        continue
+    
+    if not spl[0].lower() == scan_type.lower() and not scan_type == 'none':    
+        continue
+        
+    try:
+        file_scan_mode = header_info["scanmode"]
+    except:
+        file_scan_mode = 'undefined'
+    
+    if not motor_pos == 'none':
+        try: 
+            motor_pos_value = motor_positions[motor_pos]
+        except:
+            motor_pos_value = float('nan')
+        
+        if plot_data:    
+            y_vals.append(motor_pos_value)
+            
+    if not column_value == 'none':
+    
+        try:
+            column_data = np.mean(data[column_value])
+        except:
+            column_data = float('nan')
+        
+        if plot_data:    
+            y_vals.append(column_data)
+
+    if scan_mode == 'none' or file_scan_mode.lower() == scan_mode.lower():
+        if motor_pos == 'none' and column_value == 'none':
+            print('%25s : ' % (name) + bcolors.OKGREEN+ '%s' % (cmd) + bcolors.ENDC )
+        elif not column_value == 'none':
+            print('%25s : ' % (name) + bcolors.OKGREEN+ '%s = %6.2f' % (column_value, column_data) + bcolors.ENDC )
+        else:
+            print('%25s : ' % (name) + bcolors.OKGREEN+ '%s = %6.2f' % (motor_pos, motor_pos_value) + bcolors.ENDC )
+            
+            
+    if plot_data and len(files) == 1:
+        try:        
+            x_vals = data[column_names[0]]
+            y_vals = data[header_info['signalcounter']]
+        except:
+            pass
+
+    
+if plot_data and  y_vals:
+
+    if not x_vals:
+        x_vals = range(len(y_vals))
+        
+        
+    idx = np.argwhere(np.logical_not(np.isnan(y_vals)))
+    
+    idx = idx.transpose().tolist()[0]
+           
+    x_vals = np.asarray(x_vals)[idx]
+    y_vals = np.asarray(y_vals)[idx]
+            
+    if log_scale:    
+        plt.semilogy(x_vals, y_vals)
+    else:
+        plt.plot(x_vals, y_vals)
+      
+    if not column_value == 'none':  
+        plt.title(column_value)
+        
+    plt.show()
+    
+    
