@@ -646,13 +646,19 @@ class NeXusBatchProcessor(BaseProcessor):
         resolved_type = next(iter(element_types), object) if len(element_types) == 1 else object
 
         # Map resolved Python type to Polars dtype
-        polars_dtype = {
-            str: pl.Utf8,
-            int: pl.Int64,
-            float: pl.Float64,
-            LazyDatasetReference: pl.Object,
-            np.ndarray: pl.Object,  # TODO: Consider extracting datasets into a Series, i.e create multiple pl.Series over rows and combine in the end to a polars dt
-        }.get(resolved_type, None)
+        if resolved_type is pl.Series:
+            first_series = df_subset[col_name][0]  # Extract first element
+            inner_dtype = first_series.dtype if isinstance(first_series, pl.Series) else pl.Object
+            polars_dtype = pl.List(inner_dtype)
+        else:
+            polars_dtype = {
+                str: pl.Utf8,
+                int: pl.Int64,
+                float: pl.Float64,
+                LazyDatasetReference: pl.Object,
+                np.ndarray: pl.Object,  # TODO: Consider extracting datasets into a Series, i.e create multiple pl.Series over rows and combine in the end to a polars df
+                #TODO maybe here can be the type improve to pl.List(inner_dtype) or pl.Array
+            }.get(resolved_type, None)
 
         if polars_dtype is None:
             raise NotImplementedError(f"Unhandled type: {resolved_type} ({type(resolved_type)})")
@@ -706,7 +712,7 @@ if __name__ == "__main__":
         #col_name='human_readable_time'
         #col_name='/scan/end_time'
         #col_name='/scan/instrument/atten/attenuator_transmission'
-        col_name='/scan/instrument/dcm/energy'
+        #col_name='/scan/instrument/dcm/energy'
         
         df_resolved= damaged_folder.resolve_column(df_damaged, col_name)
       
