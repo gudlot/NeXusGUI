@@ -9,6 +9,7 @@ from base_processing import BaseProcessor
 from collections import defaultdict
 from dataclasses import dataclass
 from lazy_dataset import LazyDatasetReference
+from icecream import ic
 
 
 
@@ -220,7 +221,7 @@ class NeXusProcessor:
                     dataset_name=dataset_name
                 )
                 
-                value = {"lazy": lazy_reference}  # Store the reference instead of lambda function
+                value = {"lazy": lazy_reference}  # Store the reference
                         
             else:
                 logging.warning(f"Skipping dataset {path}: Unsupported shape {obj.shape}")
@@ -428,7 +429,7 @@ class NeXusBatchProcessor(BaseProcessor):
         
         # Store lazy references and soft links properly in `_df`**
         if self.processed_files:
-            self._df = self._build_dataframe(resolve=False)  # Keep lazy references
+            self._df = self._build_dataframe()  
             
     def get_core_metadata(self, force_reload: bool = False) -> pl.LazyFrame:
         """Return a LazyFrame containing only filename, scan_id, scan_command, and human_start_time."""
@@ -508,121 +509,62 @@ class NeXusBatchProcessor(BaseProcessor):
                         print(f"    - Shapes: {', '.join(str(shape) for shape in key_shapes[key])} are inconsistent across files")
 
         if not found_inconsistencies:
-            print("  No type inconsistencies found.")
+            print("  No type inconsistencies found.")    
 
-
-    @staticmethod
-    def _resolve_lazy_value(value: Dict[str, Any], key: str) -> Any:
-        """Resolves a lazy dataset reference or function if required.
-        
-        Args:
-            value (Dict[str, Any]): Dictionary containing "lazy" or "source" keys.
-            key (str): The key corresponding to this value in the dataset.
-        
-        Returns:
-            Any: The resolved dataset, reference, or None if resolution fails.
-        """
-        lazy_ref = value.get("lazy")
-        
-        if lazy_ref is None:
-            return value.get("source")  # Return source reference if present
-
-        try:
-            if isinstance(lazy_ref, LazyDatasetReference):
-                return lazy_ref.load_on_demand()  # Resolve LazyDatasetReference
-            if callable(lazy_ref):
-                return lazy_ref()  # Call function to resolve dataset
-            return lazy_ref  # Return as-is if it's neither callable nor a LazyDatasetReference
-        except Exception as e:
-            logging.warning(f"Failed to resolve lazy dataset for key '{key}': {e}")
-            return None  # Return None if resolution fails
-
-    @staticmethod
-    def _process_normal_value(value: Any, key: str) -> Any:
-        """Validates and processes non-lazy values.
-
-        Args:
-            value (Any): The value to process.
-            key (str): The key corresponding to this value.
+    def _build_dataframe(self) -> pl.LazyFrame:
+        """Constructs a Polars LazyFrame from processed files.
 
         Returns:
-            Any: The validated and processed value.
-
-        Raises:
-            ValueError: If an invalid type is encountered.
+            pl.LazyFrame: The constructed LazyFrame.
         """
-        if isinstance(value, (float, int, str, type(None), list, pl.Series)):
-            return value  # Return valid types directly
-
-        raise ValueError(
-            f"Inconsistent type for key '{key}': Expected float, int, str, list, or None, got {type(value)}"
-        )
-
-    def _build_dataframe(self, resolve: bool = False) -> pl.LazyFrame | pl.DataFrame:
-        """Constructs a Polars DataFrame from processed files.
-
-        Args:
-            resolve (bool): Whether to resolve lazy dataset references.
-
-        Returns:
-            pl.DataFrame: The constructed Polars DataFrame.
-        """
-        def process_value(value: Any, key: str) -> Any:
-            """Processes each value in the dataset, resolving laziness if needed."""
-            
-            #logger.debug(f"\N{hot pepper}Key {key}")
-            #logger.debug(f"\N{green apple}Value {value}")
-            
-            
+        def process_value(value: Any) -> Any:
+            """Processes individual dataset values."""
             if isinstance(value, dict):
-                return self._resolve_lazy_value(value, key) if resolve else value.get("lazy", value.get("source"))
-            return self._process_normal_value(value, key)
+                return value.get("lazy", value.get("source"))  # Prioritise "lazy", fallback to "source", else None
+
+            if isinstance(value, (float, int, str, type(None), list, pl.Series)):
+                return value  # Return supported types directly
+
+            raise ValueError(f"Unsupported type {type(value)} in dataset")
 
         try:
-                    
-            #TODO: Check what is better later. Both options work here, but one returns a DataFrame, the other imho a LazyFrame.   
-            #df=pl.DataFrame([        
-            self._df =  pl.LazyFrame([
-                {k: process_value(v, k) for k, v in file_data.items()}
+            # Construct LazyFrame from processed files
+            self._df = pl.LazyFrame([
+                {k: process_value(v) for k, v in file_data.items()}
                 for file_data in self.processed_files.values()
             ])
-            
-            #This confirms the result is a realy pl.lazyframe
-            logger.debug(10* "\N{red apple}")
-            logger.debug(f"{type(self._df)}")
-            logger.debug(f"{self._df.explain(optimized=True)}")
-            logger.debug(10* "\N{red apple}")
-        
-            
-            return self._df.collect() if resolve else self._df  # Collect if resolving          
-        except ValueError as e:
-            logging.error(f"Error building DataFrame: {e}")
-            raise  # Re-raise for debugging
-        
-        
+
+            # Validate the resulting LazyFrame
+            logger.debug("\N{red apple}" * 10)
+            logger.debug(f"LazyFrame created: {type(self._df)}")
+            logger.debug(f"Schema: {self._df.collect_schema()}")
+            logger.debug(f"Optimized plan:\n{self._df.explain(optimized=True)}")
+            logger.debug("\N{red apple}" * 10)
+
+            return self._df
+
+        except Exception as e:
+            logger.error(f"Failed to build LazyFrame: {e}", exc_info=True)
+            raise  # Preserve stack trace for debugging
 
 
-    def get_dataframe(self, force_reload: bool = False, resolve: bool = False) -> Union[pl.LazyFrame, pl.DataFrame]:
-        
-        """Return the processed data as either a lazy Polars DataFrame or an eagerly evaluated one.
+
+    def get_dataframe(self, force_reload: bool = False) -> pl.LazyFrame:
+        """Return the processed data as a Polars LazyFrame.
 
         Args:
-            force_reload (bool): Whether to reload files before building the DataFrame.
-            resolve (bool): Whether to return an eagerly evaluated `pl.DataFrame` (default: True).
+            force_reload (bool): If True, reloads files and rebuilds the LazyFrame.
 
         Returns:
-            Union[pl.LazyFrame, pl.DataFrame]: A Polars LazyFrame (if resolve=False) or DataFrame (if resolve=True).
-            
-        df_lazy = obj.get_dataframe(resolve=False)  # Returns a LazyFrame
-        df_eager = obj.get_dataframe(resolve=True)  # Returns a DataFrame
+            pl.LazyFrame: The processed data as a LazyFrame.
         """
-        
-        self.process_files(force_reload)
+        # Reprocess files if necessary
+        if force_reload or self._df is None:
+            self.process_files(force_reload)
+            self._df = self._build_dataframe()
 
-        if self._df is not None:
-            return self._df.collect() if resolve and isinstance(self._df, pl.LazyFrame) else self._df
-        
-        return self._build_dataframe(resolve=resolve)
+        return self._df
+
 
     @classmethod
     def resolve_type(cls,dataset_ref, is_lazy: bool):
@@ -655,102 +597,90 @@ class NeXusBatchProcessor(BaseProcessor):
 
         return None  # Default fallback
 
-
-    @classmethod
-    def infer_type(cls, df: pl.DataFrame | pl.LazyFrame, col: str):
-        """Infer the appropriate Polars dtype based on the first valid dataset reference."""
-                
-        is_lazy = isinstance(df, pl.LazyFrame)
         
+    def resolve_column(self, df: pl.LazyFrame, col_name: str) -> pl.LazyFrame:
+        """
+        Resolves a specified column in a Polars LazyFrame by validating its existence, 
+        inferring its data type, and resolves LazyDatasetReference objects if present.
+
+        Args:
+            df (pl.LazyFrame): The input LazyFrame.
+            col_name (str): The name of the column to resolve.
+
+        Returns:
+            pl.LazyFrame: The modified LazyFrame with resolved column values.
         
-        if isinstance(df, pl.DataFrame):
-            # Iterate over column values and return the first detected dtype (ignoring None)
-            for ref in df[col]:
-                dtype = cls.resolve_type(ref, is_lazy)
-                if dtype is not None:
-                    return dtype
-            return pl.Object  # Fallback if no valid type was found
-        
-    
-        elif is_lazy:
-            # Collect a small sample of non-null values to determine dtype
-            sample_data = (
-                df.select(pl.col(col))
-                .drop_nulls()
-                .limit(10)
-                .collect()
-                .to_series(0)  # Convert to Polars Series
-            )
-
-            #logger.debug(f"Sample_data: {sample_data}")
-            
-            # Apply `resolve_type` dynamically
-            dtypes = [cls.resolve_type(value, is_lazy) for value in sample_data if value is not None]
-            detected_dtype = dtypes[0] if dtypes else pl.Object  # Use first valid dtype or fallback
-            #logger.debug(f"Detected dtype: {detected_dtype}")
-
-            return detected_dtype
-
-        else:
-            raise TypeError("df must be a Polars DataFrame or LazyFrame")
-        
-    def resolve_column(self, df: pl.DataFrame | pl.LazyFrame, col_name: str, eager: bool = False) -> pl.DataFrame | pl.LazyFrame:
-        """Resolve LazyDatasetReference objects in a column.
-
-        - If `eager=True`, force resolves `LazyDatasetReference` objects, even in LazyFrames.
-        - If `eager=False`, keeps references for lazy resolution.
-
-        When calling `.collect()` on a LazyFrame, ensure `eager=True` is used to resolve data.
+        Raises:
+            ValueError: If the specified column is not found in the dataframe.
         """
         # Validate column existence
-        if isinstance(df, pl.LazyFrame):
-            schema_names = df.collect_schema().names()
-            if col_name not in schema_names:
-                raise ValueError(f"Column '{col_name}' not found in LazyFrame schema.")
-        elif isinstance(df, pl.DataFrame):
-            if col_name not in df.columns:
-                raise ValueError(f"Column '{col_name}' not found in DataFrame.")
-
+        schema_names = df.collect_schema().names()
+        if col_name not in schema_names:
+            raise ValueError(f"Column '{col_name}' not found in LazyFrame schema.")
 
         def resolve_value(value: Any) -> Any:
             """Resolves LazyDatasetReference objects eagerly if needed."""
             if isinstance(value, LazyDatasetReference):
                 return value.load_on_demand()  # Resolve if needed
             return value  # Other values remain unchanged
+                    
+                        
+        # Sample a small subset of the column (limit 10, drop None)
+        df_subset = (
+                df.select(pl.col(col_name))
+                .limit(10)  # Small subset to inspect
+                .drop_nulls()  # Remove None values
+                .collect()
+        )
+        
+        logger.debug(30* "\N{green apple}")
+        ic(df_subset, type(df_subset), df_subset[col_name].dtype)
+      
+        # Determine unique element types, resolving LazyDatasetReference if present
+        element_types = {
+            type(getattr(v, "load_on_demand", lambda: v)()) for v in df_subset[col_name]
+        }
+        ic(element_types)
 
-        # Infer return dtype
-        infer_type_val = self.infer_type(df, col_name)
-        
-        
-        
-        logger.debug(10* "\N{green apple}")
-        print(f"Inferred dtype: { infer_type_val}")
-        logger.debug(f"DataFrame type: {type(df)}")
-        #logger.debug(f" Schema: {df.schema}")
-        logger.debug(10* "\N{green apple}")
-        
+        # Resolve column type
+        resolved_type = next(iter(element_types), object) if len(element_types) == 1 else object
 
-        if isinstance(df, pl.DataFrame) or eager:
-            # Resolve eagerly
-            return df.with_columns(
-                pl.col(col_name).map_elements(resolve_value, return_dtype=infer_type_val).alias(col_name)
-            )
+        # Map resolved Python type to Polars dtype
+        if resolved_type is pl.Series:
+            first_series = df_subset[col_name][0]  # Extract first element
+            inner_dtype = first_series.dtype if isinstance(first_series, pl.Series) else pl.Object
+            polars_dtype = pl.List(inner_dtype)
+        else:
+            polars_dtype = {
+                str: pl.Utf8,
+                int: pl.Int64,
+                float: pl.Float64,
+                LazyDatasetReference: pl.Object,
+                np.ndarray: pl.Object,  # TODO: Consider extracting datasets into a Series, i.e create multiple pl.Series over rows and combine in the end to a polars df
+                #TODO maybe here can be the type improve to pl.List(inner_dtype) or pl.Array
+            }.get(resolved_type, None)
 
-        # Keep lazy references if eager=False
+        if polars_dtype is None:
+            raise NotImplementedError(f"Unhandled type: {resolved_type} ({type(resolved_type)})")
+
+        ic(resolved_type, polars_dtype)
+        logger.debug(30 * "\N{green apple}")
+
+        # Apply transformation
         return df.with_columns(
-            pl.col(col_name).map_batches(
-                lambda batch: pl.Series([resolve_value(val) for val in batch]),
-                return_dtype=infer_type_val
-            ).alias(col_name)
-        ) if isinstance(df, pl.LazyFrame) else df
-
+            pl.col(col_name)
+            .map_elements(
+                lambda ref: resolve_value(ref),
+                return_dtype=pl.Object if LazyDatasetReference in element_types else polars_dtype
+            )
+            .alias(col_name)
+        )
         
     def get_structure_list(self, force_reload: bool = False):
         """Return the hierarchical structure list."""
         self.process_files(force_reload)
         return self.structure_list
     
-
 
 if __name__ == "__main__":
       
@@ -764,8 +694,8 @@ if __name__ == "__main__":
         
         
         # Get the DataFrame with regular data (processed files)
-        df_damaged = damaged_folder.get_dataframe(resolve=True)
-        print("Regular DataFrame (df_damaged):")
+        df_damaged = damaged_folder.get_dataframe()
+        print("DataFrame (df_damaged):")
         print(type(df_damaged))
         
         
@@ -773,24 +703,25 @@ if __name__ == "__main__":
         
         print(30*"\N{pineapple}")
         
-        col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
-        col_name = '/scan/apd/data'
-        col_name='/scan/instrument/collection/exp_t01'
+        #col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
+        #col_name = '/scan/apd/data'
+        #col_name='/scan/instrument/collection/exp_t01'
+        #col_name='/scan/bpm1/attenuator/foilpos'
+        #col_name='/scan/bpm1/attenuator/type'
         #col_name='/scan/data/exp_t01'
         #col_name='human_readable_time'
+        #col_name='/scan/end_time'
+        #col_name='/scan/instrument/atten/attenuator_transmission'
+        #col_name='/scan/instrument/dcm/energy'
         
         df_resolved= damaged_folder.resolve_column(df_damaged, col_name)
-        df_resolved2= damaged_folder.resolve_column(damaged_folder.get_dataframe(resolve=False), col_name, eager=False)
-
+      
         # After applying the transformation, inspect the first row
         print('\n\n df_resolved is ...')
         print(df_resolved.head())
         print(df_resolved.select(col_name))
         
-        print('\n\n df_resolved2 is ...')
-        print(df_resolved2.head())
-        print(df_resolved2.select(col_name))     
-                
+                      
         print(30*"\N{pineapple}")
         
         # Get the DataFrame with lazy-loaded data (evaluated columns)
@@ -804,17 +735,20 @@ if __name__ == "__main__":
         print("\N{banana}\N{banana}\N{banana}")
         
         # Now, use the resolve_lazy_column function to resolve the column containing LazyDatasetReference
-        df_resolved_lazy = damaged_folder.resolve_column(df_damaged_lazy, col_name, eager=False)
+        df_resolved_col = damaged_folder.resolve_column(df_damaged_lazy, col_name)
         
 
         # To see the result of the resolved column
         print(20*"\N{cucumber}")
         print("\N{rainbow}\N{rainbow}\N{rainbow} Resolved DataFrame:")
-        print(df_resolved_lazy)
-        print('Type of df: ', type(df_resolved_lazy))
+        print(df_resolved_col.explain(optimized=True))
+        print('Type of df: ', type(df_resolved_col.select(col_name)))
         print(20*"\N{cucumber}")
+        print("Eagerly loading of selected column now ...")
+        print(df_resolved_col.select(col_name).collect())
+        random_value = df_resolved_col.select(col_name).collect().sample(n=1, with_replacement=False).item()
+        print(f"Random row in column: {random_value}, Type: {type(random_value)}")
         
-        print(df_resolved_lazy.select(col_name).collect())
 
         import random
         def select_and_execute(df_lazy: pl.LazyFrame, num_cols: int = 10):
@@ -830,14 +764,11 @@ if __name__ == "__main__":
                 print(df_lazy.select(col_name).collect())
         
         # Run function
-        #select_and_execute(df_resolved_lazy)
+        #select_and_execute(df_resolved_col)
 
        
     # Run the test
     test_broken()
-
-
-
     
     def test_raw():
         file_path=Path("/Users/lotzegud/P08/11019623/raw")
