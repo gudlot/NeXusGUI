@@ -1,3 +1,25 @@
+# NeXusGUI – A GUI for visualising data across multiple NeXus files.
+# Copyright (C) 2025 Gudrun Lotze
+# This file is part of NeXusGUI.
+#
+# NeXusGUI is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# NeXusGUI is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with NeXusGUI. If not, see <https://www.gnu.org/licenses/>.
+
+__author__ = "Gudrun Lotze"
+__copyright__ = "Copyright 2025"
+__license__ = "AGPL-3.0"
+__status__ = "Development"
+
 import numpy as np
 import polars as pl
 import logging
