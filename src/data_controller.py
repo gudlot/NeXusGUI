@@ -97,9 +97,7 @@ class DataController:
                     column_names[name] = name
 
         return column_names
-
-
-    
+  
     
     def process_selected_files(
         self,
@@ -285,18 +283,20 @@ class DataController:
                 logger.warning(f"Skipping '{column}' - column not found in DataFrame schema.")
                 continue
 
-             # Ensure the column is a string type before applying string operations
-            col_type= self.nxs_processor.infer_type(df, column)
+            # Ensure the column is a string type before applying string operations
+            #col_type= self.nxs_processor.infer_type(df, column)
+            col_type = df.collect_schema()[column]
             logger.debug(f"Col_dtype {col_type}")
             
             # Ensure the column is a string type and contains at least one soft link
-            if col_type == pl.Utf8 and df.select(pl.col(column).str.starts_with("/").any()).collect().head(1).item():
+            if col_type == pl.Utf8 and df.select(pl.col(column).str.starts_with("/").any()).collect().item():
                 is_soft_link = pl.col(column).str.starts_with("/")
             else:
                 logger.debug(f"Skipping '{column}' - dtype is {col_type} or it contains no soft links.")
                 continue
             
             logger.debug(f'Current colum  is {column}')
+            logger.debug(f'is_soft_link, {is_soft_link}')
 
             # Extract unique soft link targets (ignoring nulls)
             unique_targets = (
@@ -321,7 +321,8 @@ class DataController:
                 
                 #print(df.select(pl.col(target_column)).collect())  # See actual values
                 
-                target_type = self.nxs_processor.infer_type(df, target_column)
+                #target_type = self.nxs_processor.infer_type(df, target_column)
+                target_type = df.collect_schema()[target_column]
                 
                 logger.debug(f"Target type {target_type}")
 
@@ -329,6 +330,12 @@ class DataController:
                     logger.debug(f"Resolving soft links: All rows in '{column}' point to '{target_column}'")
                                        
                     
+                    #df = df.with_columns(
+                    #    pl.when(is_soft_link & pl.col(target_column).is_not_null())  
+                    #    .then(pl.col(target_column).cast(pl.Object))  # Ensure the soft link target is Object
+                    #    .otherwise(pl.col(column).cast(pl.Object))  # Ensure the original column is also Object
+                    #    .alias(column)  # Overwrite the existing column
+                    #)
                     df = df.with_columns(
                         pl.when(is_soft_link & pl.col(target_column).is_not_null())  
                         .then(pl.col(target_column).cast(pl.Object))  # Ensure the soft link target is Object
@@ -336,6 +343,8 @@ class DataController:
                         .alias(column)  # Overwrite the existing column
                     )
                     
+                    
+                    print(df)
                     df = df.collect() 
                     print(df.head(5))
                                         
@@ -477,16 +486,18 @@ if __name__ == "__main__":
         return [str(directory_path / file.name) for file in directory_path.glob(f"*{extension}")]
 
 
-    path= "/Users/lotzegud/P08/healthy2/"
+    path= "/Users/lotzegud/P08_test_data/healthy2/"
     nxs_processor = NeXusBatchProcessor(path)
     fio_processor = FioBatchProcessor(path)
     
     nxs_metadata_cols = ['filename', 'scan_command', 'scan_id', 'human_start_time']
+   
+    print(nxs_processor.get_dataframe())
     
-    nxs_df_meta = nxs_processor.get_dataframe(resolve=False).select(nxs_metadata_cols).collect()
+    nxs_df_meta = nxs_processor.get_dataframe().select(nxs_metadata_cols).collect()
     print(nxs_df_meta)
     
-    nxs_df = nxs_processor.get_dataframe(resolve=False)
+    nxs_df = nxs_processor.get_dataframe()
     print(nxs_df.select('/scan/data/apd').collect())
     print(nxs_df.select('/scan/apd/data').collect())
     
