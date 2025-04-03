@@ -258,20 +258,24 @@ class DataController:
 
 
 
-    def _resolve_soft_links(self, df: pl.LazyFrame, columns: list[str]) -> pl.LazyFrame:
-        """
-        Resolves soft links in multiple columns by mapping each row-element to the corresponding value in another column.
-        Optimized to handle cases where all row elements in a column are the same.
+    def _resolve_soft_links(self, df: pl.LazyFrame, columns: list[str]) -> list[str] :
+         """
+        Resolves soft links by checking if the column contains only one unique string starting with `/` or None.
+        If more than one unique value exists, it raises an error.
+        The function returns a list of columns that had their soft links resolved.
 
         Args:
-            df (pl.LazyFrame): The LazyFrame containing the columns.
-            columns (list[str]): The column names containing potential soft links.
+            df (pl.LazyFrame): The DataFrame containing the columns to check.
+            columns (list[str]): List of column names to check for soft links.
 
         Returns:
-            pl.LazyFrame: The LazyFrame with soft links resolved.
-            
+            list[str]: List of columns where soft links were resolved.
         """
+
         print(f"Columns is  {columns}")
+        
+        resolved_columns = []
+        
         
         for column in columns:
             
@@ -280,92 +284,43 @@ class DataController:
             
             # Check if the column exists in DataFrame schema
             if column not in df.collect_schema().names():
-                logger.warning(f"Skipping '{column}' - column not found in DataFrame schema.")
+                logger.warning(f"Skipping '{column}' - column not found in LazyFrame schema.")
                 continue
-
-            # Ensure the column is a string type before applying string operations
-            #col_type= self.nxs_processor.infer_type(df, column)
-            col_type = df.collect_schema()[column]
-            logger.debug(f"Col_dtype {col_type}")
-            
-            # Ensure the column is a string type and contains at least one soft link
-            if col_type == pl.Utf8 and df.select(pl.col(column).str.starts_with("/").any()).collect().item():
-                is_soft_link = pl.col(column).str.starts_with("/")
-            else:
-                logger.debug(f"Skipping '{column}' - dtype is {col_type} or it contains no soft links.")
+                       
+            # Ensure column is of type Utf8 (string)
+            col_type = df.schema[column]
+            logger.debug(f"Column '{column}' dtype: {col_type}")
+            if col_type != pl.Utf8:
+                logger.debug(f"Skipping '{column}' - dtype is {col_type}, not Utf8 (string).")
+                resolved_columns.append(column)
                 continue
             
-            logger.debug(f'Current colum  is {column}')
-            logger.debug(f'is_soft_link, {is_soft_link}')
+             # Check if the column contains any strings starting with "/"
+            starts_with_slash = df.select(pl.col(column).str.starts_with("/").any()).collect().item()
 
-            # Extract unique soft link targets (ignoring nulls)
-            unique_targets = (
-                df.filter(is_soft_link)  # Only keep rows where the column starts with '/'
-                .select(pl.col(column).drop_nulls().unique())
-                .collect().head(5)  # Fetch at most 5 unique values to limit memory usage
-            )
-                    
-            # Convert unique targets to a Python list
-            target_paths = unique_targets[column].to_list()
+            if not starts_with_slash:
+                logger.debug(f"Skipping '{column}' - does not contain values starting with '/'.")
+                continue
             
-            # If all soft links point to the same target column
-            non_null_targets = [path for path in target_paths if path is not None]
-            if len(non_null_targets) == 1:
-                target_column = non_null_targets[0]
-                
-                logger.debug(f"Column is: {column}")
-                logger.debug(f"Target column is {target_column}")
-                
-                
-                print(df.select(target_column))
-                
-                #print(df.select(pl.col(target_column)).collect())  # See actual values
-                
-                #target_type = self.nxs_processor.infer_type(df, target_column)
-                target_type = df.collect_schema()[target_column]
-                
-                logger.debug(f"Target type {target_type}")
+            # Select column and filter non-null values
+            unique_values = df.select(pl.col(column).drop_nulls().unique()).collect().get_column(column).to_list()
 
-                if target_column in df.collect_schema().names():
-                    logger.debug(f"Resolving soft links: All rows in '{column}' point to '{target_column}'")
-                                       
-                    
-                    #df = df.with_columns(
-                    #    pl.when(is_soft_link & pl.col(target_column).is_not_null())  
-                    #    .then(pl.col(target_column).cast(pl.Object))  # Ensure the soft link target is Object
-                    #    .otherwise(pl.col(column).cast(pl.Object))  # Ensure the original column is also Object
-                    #    .alias(column)  # Overwrite the existing column
-                    #)
-                    df = df.with_columns(
-                        pl.when(is_soft_link & pl.col(target_column).is_not_null())  
-                        .then(pl.col(target_column).cast(pl.Object))  # Ensure the soft link target is Object
-                        .otherwise(pl.col(column).cast(pl.Object))  # Ensure the original column is also Object
-                        .alias(column)  # Overwrite the existing column
-                    )
-                    
-                    
-                    print(df)
-                    df = df.collect() 
-                    print(df.head(5))
-                                        
-                    logger.debug(10*"\N{strawberry} \N{blueberries} ")
-                    logger.debug(f"Updated dtype for '{column}': {df.schema[column]}")
-                               
-                    print(df.select(column).collect())  # Should show LazyDatasetReference where appropriate           
-                    logger.debug(10*"\N{strawberry} \N{banana}")
-                else:
-                    logger.warning(f"Target column '{target_column}' not found. Replacing '{column}' with None.")
-                    df = df.with_columns(pl.lit(None).alias(column))
+            # If there are multiple unique values, raise an error
+            if len(unique_values) > 1:
+                logger.error(f"Column '{column}' contains multiple unique values: {unique_values}")
+                raise ValueError(f"Column '{column}' contains multiple unique values. Cannot resolve soft links.")
 
-            else:
-                # Rows have different soft links; resolve row-wise
-                logger.debug(f"Column '{column}' contains different soft links. Resolving individually.")
+            # If there is only one unique value, it should already start with "/"
+            elif len(unique_values) == 1:
+                target_column = unique_values[0]
+                logger.debug(f"Resolved soft link in '{column}', pointing to '{target_column}'")
+                # Add the target column to the resolved_columns list
+                resolved_columns.append(target_column)
 
-                raise ValueError()
-  
-
-        return df
-
+        # Return the list of resolved target columns
+        return resolved_columns
+            
+            
 
     
 
