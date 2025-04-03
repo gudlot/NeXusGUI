@@ -147,9 +147,12 @@ class DataController:
         if nxs_files:
 
             # Resolve soft links for all selected columns
-            logger.debug(f"Before resolving soft links: {self.nxs_df.collect().height} rows")
-            resolved_nxs_df = self._resolve_soft_links(self.nxs_df, columns)
-            logger.debug(f"After resolving soft links: {resolved_nxs_df.collect().height} rows")
+            
+            resolved_columns = self._resolve_soft_links(self.nxs_df, columns)
+            logger.debug(f"Before resolving soft links: {columns}")
+            logger.debug(f"After resolving soft links: {resolved_columns}")
+            
+            
 
             
             # Check if resolving soft links resulted in an empty DataFrame
@@ -272,12 +275,14 @@ class DataController:
             list[str]: List of columns where soft links were resolved.
         """
 
-        print(f"Columns is  {columns}")
+        print(f"Columns is {columns}")
         
         resolved_columns = []
         
         
         for column in columns:
+            # Default: Preserve original column name unless resolved
+            result_column = column      
             
             logger.debug(f'\N{hot pepper} \N{hot pepper} \N{hot pepper} Current colum  is {column}')
             print(df.select(column).collect())
@@ -285,44 +290,36 @@ class DataController:
             # Check if the column exists in DataFrame schema
             if column not in df.schema:
                 logger.warning(f"Skipping '{column}' - column not found in LazyFrame schema.")
+                resolved_columns.append(result_column)
                 continue
                        
-            # Ensure column is of type Utf8 (string)
-            col_type = df.schema[column]
-            logger.debug(f"Column '{column}' dtype: {col_type}")
-            if col_type != pl.Utf8:
-                logger.debug(f"Skipping '{column}' - dtype is {col_type}, not Utf8 (string).")
-                resolved_columns.append(column)
-                continue
+            # Only process string (Utf8) columns
+            if df.schema[column] == pl.Utf8:
+                try:
+                    # Check soft-link conditions in one query
+                    query = df.select(
+                        pl.col(column).str.starts_with("/").any().alias("has_slash"),
+                        pl.col(column).drop_nulls().unique().count().alias("unique_count"),
+                        pl.col(column).drop_nulls().first().alias("first_value")
+                    )
+                    has_slash, unique_count, first_value = query.collect().row(0)
 
-            # Create a single query to check all conditions
-            query = (
-                df.select(
-                    pl.col(column).str.starts_with("/").any().alias("has_slash"),
-                    pl.col(column).drop_nulls().unique().count().alias("unique_count"),
-                    pl.col(column).drop_nulls().first().alias("first_value")
-                )
-            )
-            
-            # Execute the query once for all checks
-            result = query.collect().row(0)
-            has_slash, unique_count, first_value = result
-            
-            if not has_slash:
-                logger.debug(f"Skipping '{column}' - does not contain values starting with '/'.")
-                continue
-                
-            if unique_count > 1:
-                logger.error(f"Column '{column}' contains multiple unique values.")
-                raise ValueError(f"Column '{column}' contains multiple unique values. Cannot resolve soft links.")
-                
-            if unique_count == 1:
-                target_column = first_value
-                logger.debug(f"Resolved soft link in '{column}', pointing to '{target_column}'")
-                resolved_columns.append(target_column)
+                    if has_slash:
+                        if unique_count > 1:
+                            raise ValueError(f"Ambiguous soft link: '{column}' has multiple unique paths.")
+                        if unique_count == 1:
+                            result_column = first_value  # Resolve to target path
+                            logger.debug(f"Resolved: {column} → {result_column}")
+                    else:
+                        logger.debug(f"Column '{column}' is a string but not a soft link (no '/' prefix).")
+                        # result_column remains unchanged (original name)
 
-        return resolved_columns
-                
+                except Exception as e:
+                    logger.error(f"Error processing '{column}': {e}")
+                    # On error, preserve original name (or re-raise if desired)
+
+            resolved_columns.append(result_column)  # Always append (original or resolved)
+        return resolved_columns            
 
     def _format_and_broadcast_data(
         self,
