@@ -259,7 +259,7 @@ class DataController:
 
 
     def _resolve_soft_links(self, df: pl.LazyFrame, columns: list[str]) -> list[str] :
-         """
+        """
         Resolves soft links by checking if the column contains only one unique string starting with `/` or None.
         If more than one unique value exists, it raises an error.
         The function returns a list of columns that had their soft links resolved.
@@ -279,11 +279,11 @@ class DataController:
         
         for column in columns:
             
-            logger.debug(f'\N{hot pepper}\N{hot pepper}\N{hot pepper}Current colum  is {column}')
+            logger.debug(f'\N{hot pepper} \N{hot pepper} \N{hot pepper} Current colum  is {column}')
             print(df.select(column).collect())
             
             # Check if the column exists in DataFrame schema
-            if column not in df.collect_schema().names():
+            if column not in df.schema:
                 logger.warning(f"Skipping '{column}' - column not found in LazyFrame schema.")
                 continue
                        
@@ -294,35 +294,35 @@ class DataController:
                 logger.debug(f"Skipping '{column}' - dtype is {col_type}, not Utf8 (string).")
                 resolved_columns.append(column)
                 continue
-            
-             # Check if the column contains any strings starting with "/"
-            starts_with_slash = df.select(pl.col(column).str.starts_with("/").any()).collect().item()
 
-            if not starts_with_slash:
+            # Create a single query to check all conditions
+            query = (
+                df.select(
+                    pl.col(column).str.starts_with("/").any().alias("has_slash"),
+                    pl.col(column).drop_nulls().unique().count().alias("unique_count"),
+                    pl.col(column).drop_nulls().first().alias("first_value")
+                )
+            )
+            
+            # Execute the query once for all checks
+            result = query.collect().row(0)
+            has_slash, unique_count, first_value = result
+            
+            if not has_slash:
                 logger.debug(f"Skipping '{column}' - does not contain values starting with '/'.")
                 continue
-            
-            # Select column and filter non-null values
-            unique_values = df.select(pl.col(column).drop_nulls().unique()).collect().get_column(column).to_list()
-
-            # If there are multiple unique values, raise an error
-            if len(unique_values) > 1:
-                logger.error(f"Column '{column}' contains multiple unique values: {unique_values}")
+                
+            if unique_count > 1:
+                logger.error(f"Column '{column}' contains multiple unique values.")
                 raise ValueError(f"Column '{column}' contains multiple unique values. Cannot resolve soft links.")
-
-            # If there is only one unique value, it should already start with "/"
-            elif len(unique_values) == 1:
-                target_column = unique_values[0]
+                
+            if unique_count == 1:
+                target_column = first_value
                 logger.debug(f"Resolved soft link in '{column}', pointing to '{target_column}'")
-                # Add the target column to the resolved_columns list
                 resolved_columns.append(target_column)
 
-        # Return the list of resolved target columns
         return resolved_columns
-            
-            
-
-    
+                
 
     def _format_and_broadcast_data(
         self,
