@@ -153,46 +153,62 @@ class DataController:
             logger.debug(f"Before resolving soft links: {columns}")
             logger.debug(f"After resolving soft links: {resolved_columns}")
             
-            # Combined operations in single collection
+            # 1. Get resolved columns
+            resolved_columns = self._resolve_soft_links(self.nxs_df, columns)
+            logger.debug(f"Column resolution:\nBefore: {columns}\nAfter: {resolved_columns}")
+
+            # 2. Combined collection with optimized sampling
+            sample_size = 50
+            detection_rows = 5
+
             combined_sample = (
                 nxs_df
                 .select(resolved_columns)
-                # Get sample for both null checks and reference detection
-                .filter(pl.arange(0, pl.len()).shuffle().over(resolved_columns[0]) < 50)
+                .with_row_count()
+                .filter(
+                    pl.col("row_nr").shuffle().over(resolved_columns[0]) < sample_size
+                )
+                .drop("row_nr")
                 .collect()
             )
 
-            # Step 1: Get null counts from the collected sample
-            col_stats = combined_sample.null_count()
-            print("Null counts:\n", col_stats)
+            # 3. Enhanced null analysis
+            null_stats = combined_sample.select(
+                pl.all().null_count().name.prefix("nulls_"),
+                pl.all().count().name.prefix("total_")
+            )
+            print("Column statistics:\n", null_stats)
 
-            # Step 2: Use first 5 non-null rows for reference detection
-            detection_sample = combined_sample.filter(
-                pl.all_horizontal(pl.col(resolved_columns).is_not_null())
-            ).head(5)
-
-            # Step 3: Identify reference columns
+            # 4. More robust reference detection
             ref_columns = [
                 col for col in resolved_columns
-                if any(
+                if combined_sample[col].head(detection_rows)
+                .is_not_null()
+                .any()
+                and any(
                     isinstance(val, LazyDatasetReference)
-                    for val in detection_sample[col]
+                    for val in combined_sample[col].head(detection_rows)
                     if val is not None
                 )
             ]
-            print(f"Columns requiring load_on_demand: {ref_columns}")
-            
-            # Step 4: Load references if needed
-            if ref_columns:
-                nxs_sample = combined_sample.with_columns([
+            logger.info(f"Reference columns found: {ref_columns or 'None'}")
+
+            # 5. Optimized reference loading
+            nxs_sample = (
+                combined_sample
+                if not ref_columns else
+                combined_sample.with_columns([
                     pl.col(col).map_elements(
-                        lambda x: x.load_on_demand(),
-                        return_dtype=pl.Object  # Important for type stability
-                    )
+                        lambda x: (
+                            x.load_on_demand() 
+                            if isinstance(x, LazyDatasetReference) 
+                            else x
+                        ),
+                        return_dtype=pl.Object
+                    ).alias(col)
                     for col in ref_columns
                 ])
-            else:
-                nxs_sample = combined_sample
+            )
                             
                 
             print("Sample data:\n", nxs_sample)
