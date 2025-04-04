@@ -184,6 +184,12 @@ class DataController:
             ]
             print(f"Columns requiring load_on_demand: {ref_columns}")
             
+            #nxs_df (Lazy) 
+            #→ [select] → LazyFrame1 
+            #→ [filter] → LazyFrame2 
+            #→ [map_batches] → LazyFrame3 
+            #→ [collect] → nxs_sample (DataFrame)
+            
             #Original sampling with added reference loading
             nxs_sample = (
                 nxs_df
@@ -202,59 +208,20 @@ class DataController:
                 .collect()
             )
             print("Sample data:\n", nxs_sample)
+            value = nxs_sample.select(pl.col('/scan/apd/data')).row(0)[0]
+            print(value)
+            print(type(value))
             
-            
-            
-                        
-            # Check if resolving soft links resulted in an empty DataFrame
-            if resolved_nxs_df.collect().height == 0:
-                breakpoint()  # or pdb.set_trace()
-                logger.debug("No soft links resolved, using original dataset instead.")
-                resolved_nxs_df = self.nxs_df.select(columns)
+
+         
+         
             
             logger.debug(10*"\N{strawberry}")
             logger.debug(resolved_nxs_df)
-            logger.debug(resolved_nxs_df.select('/scan/data/apd').collect())
+
             logger.debug(10*"\N{strawberry}")
 
-            # Now filter and select the required columns
-            nxs_data = (
-                resolved_nxs_df
-                .filter(pl.col("filename").is_in(nxs_files))  # Filter selected files
-                .select(columns)  # Select required columns
-                .sort("scan_id")  # Sort by scan_id
-            )
-
-            print(30 * "\N{pineapple}")
-            logger.debug(f"nxs_data type: {type(nxs_data)}")
-            nxs_data_eager = nxs_data.collect()
-            print("DataFrame nxs_data_eager Structure:")
-            print(nxs_data_eager.head())  # Print the first few rows of the DataFrame
-            
-                        # Let's say row_index = 1 for the example
-            # Let's say row_index = 1 for the example
-            row_index = 1
-
-            # Access the content of the column for row_index
-            lazy_frame_in_row = nxs_data_eager[row_index, "/scan/data/epoch"]
-            print(nxs_data_eager[row_index, "/scan/data/epoch"])
-            print(type(nxs_data_eager[row_index, "/scan/data/epoch"]))
-
-            # Check if the value is a LazyFrame before calling collect
-            if isinstance(lazy_frame_in_row, pl.LazyFrame):
-                # Collect the nested LazyFrame content
-                resolved_data = lazy_frame_in_row.collect()
-                print("Resolved data from row {}:".format(row_index), resolved_data)
-            else:
-                # Handle the case where the data is not a LazyFrame
-                print(f"Row {row_index} does not contain a LazyFrame. It contains: {lazy_frame_in_row}")
-            print(30 * "\N{pineapple}")
-                        
-                        
-
-            # Resolve nested LazyDatasets if any
-            if isinstance(nxs_data, pl.LazyFrame):
-                nxs_data = self._resolve_nested_lazy_datasets(nxs_data)
+           
 
         # Process .fio files (eager)
         if fio_files:
@@ -309,6 +276,7 @@ class DataController:
         
         # Create a new eager DataFrame with the resolved columns
         return eager_frame.select(resolved_columns)
+
 
 
 
@@ -516,9 +484,9 @@ if __name__ == "__main__":
     x_column= '/scan/instrument/collection/q'
     x_column= '/scan/data/apd'
     y_column = '/scan/instrument/collection/sth_pos'
-    
+    z_column= '/scan/ion1/data'
     
     column_names = datacon.get_column_names(file_selection)
     #print(column_names)
     
-    datacon.process_selected_files(file_selection, x_column, y_column)
+    datacon.process_selected_files(file_selection, x_column, y_column,  z_column)
