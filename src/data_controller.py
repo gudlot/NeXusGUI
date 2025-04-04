@@ -162,12 +162,21 @@ class DataController:
             print("Null counts:\n", col_stats)
             
             # Step 2: Sample non-null rows for reference detection
+            #detection_sample = (
+            #    nxs_df
+            #    .select(resolved_columns)
+            #    .filter(
+            #        pl.fold(acc=True, function=lambda acc, x: acc & x, 
+            #        exprs=[pl.col(col).is_not_null() for col in resolved_columns])
+            #    )
+            #    .head(5)
+            #    .collect()
+            #)
             detection_sample = (
                 nxs_df
                 .select(resolved_columns)
                 .filter(
-                    pl.fold(acc=True, function=lambda acc, x: acc & x, 
-                    exprs=[pl.col(col).is_not_null() for col in resolved_columns])
+                    pl.any_horizontal(pl.col(resolved_columns).is_not_null())
                 )
                 .head(5)
                 .collect()
