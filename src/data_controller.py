@@ -189,16 +189,18 @@ class DataController:
                 nxs_df
                 .select(resolved_columns)
                 .filter(pl.arange(0, pl.len()).shuffle().over(resolved_columns[0]) < 50)
-                .with_columns([
-                    pl.col(col).map_elements(
-                        lambda x: x.load_on_demand() if isinstance(x, LazyDatasetReference) else x,
-                        return_dtype=pl.Object
+                .map_batches(lambda batch: pl.DataFrame({
+                    col: (
+                        batch[col].map_elements(
+                            lambda x: x.load_on_demand(),
+                            return_dtype=pl.Object  # or a more specific dtype if known
+                        ) if col in ref_columns 
+                        else batch[col]
                     )
-                    for col in ref_columns  # Only process confirmed reference columns
-                ])
+                    for col in batch.columns
+                }))
                 .collect()
-            )    
-            
+            )
             print("Sample data:\n", nxs_sample)
             
             
