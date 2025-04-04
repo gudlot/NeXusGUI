@@ -153,24 +153,23 @@ class DataController:
             logger.debug(f"Before resolving soft links: {columns}")
             logger.debug(f"After resolving soft links: {resolved_columns}")
             
-            # Step 1: Get null counts (as you're already doing)
-            col_stats = nxs_df.select([
-                pl.col(col).null_count().alias(f"{col}_nulls") 
-                for col in resolved_columns
-            ]).collect()
-
-            print("Null counts:\n", col_stats)
-            
-            # Step 2: Sample non-null rows for reference detection
-            detection_sample = (
+            # Combined operations in single collection
+            combined_sample = (
                 nxs_df
                 .select(resolved_columns)
-                .filter(
-                    pl.any_horizontal(pl.col(resolved_columns).is_not_null())
-                )
-                .head(5)
+                # Get sample for both null checks and reference detection
+                .filter(pl.arange(0, pl.len()).shuffle().over(resolved_columns[0]) < 50)
                 .collect()
             )
+
+            # Step 1: Get null counts from the collected sample
+            col_stats = combined_sample.null_count()
+            print("Null counts:\n", col_stats)
+
+            # Step 2: Use first 5 non-null rows for reference detection
+            detection_sample = combined_sample.filter(
+                pl.all_horizontal(pl.col(resolved_columns).is_not_null())
+            ).head(5)
 
             # Step 3: Identify reference columns
             ref_columns = [
@@ -183,29 +182,19 @@ class DataController:
             ]
             print(f"Columns requiring load_on_demand: {ref_columns}")
             
-            #nxs_df (Lazy) 
-            #→ [select] → LazyFrame1 
-            #→ [filter] → LazyFrame2 
-            #→ [map_batches] → LazyFrame3 
-            #→ [collect] → nxs_sample (DataFrame)
-            
-            #Original sampling with added reference loading
-            nxs_sample = (
-                nxs_df
-                .select(resolved_columns)
-                .filter(pl.arange(0, pl.len()).shuffle().over(resolved_columns[0]) < 50)
-                .map_batches(lambda batch: pl.DataFrame({
-                    col: (
-                        batch[col].map_elements(
-                            lambda x: x.load_on_demand(),
-                            return_dtype=pl.Object  # or a more specific dtype if known
-                        ) if col in ref_columns 
-                        else batch[col]
+            # Step 4: Load references if needed
+            if ref_columns:
+                nxs_sample = combined_sample.with_columns([
+                    pl.col(col).map_elements(
+                        lambda x: x.load_on_demand(),
+                        return_dtype=pl.Object  # Important for type stability
                     )
-                    for col in batch.columns
-                }))
-                .collect()
-            )
+                    for col in ref_columns
+                ])
+            else:
+                nxs_sample = combined_sample
+                            
+                
             print("Sample data:\n", nxs_sample)
             value = nxs_sample.select(pl.col('/scan/apd/data')).row(0)[0]
             print(value)
