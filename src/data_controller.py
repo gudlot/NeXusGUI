@@ -28,6 +28,7 @@ from fio_processing import FioBatchProcessor
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List
+from lazy_dataset import LazyDatasetReference
 
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -152,9 +153,57 @@ class DataController:
             logger.debug(f"Before resolving soft links: {columns}")
             logger.debug(f"After resolving soft links: {resolved_columns}")
             
-            
+            # Step 1: Get null counts (as you're already doing)
+            col_stats = nxs_df.select([
+                pl.col(col).null_count().alias(f"{col}_nulls") 
+                for col in resolved_columns
+            ]).collect()
 
+            print("Null counts:\n", col_stats)
             
+            # Step 2: Sample non-null rows for reference detection
+            detection_sample = (
+                nxs_df
+                .select(resolved_columns)
+                .filter(
+                    pl.fold(acc=True, function=lambda acc, x: acc & x, 
+                    exprs=[pl.col(col).is_not_null() for col in resolved_columns])
+                )
+                .head(5)
+                .collect()
+            )
+
+            # Step 3: Identify reference columns
+            ref_columns = [
+                col for col in resolved_columns
+                if any(
+                    isinstance(val, LazyDatasetReference)
+                    for val in detection_sample[col]
+                    if val is not None
+                )
+            ]
+            print(f"Columns requiring load_on_demand: {ref_columns}")
+            
+            #Original sampling with added reference loading
+            nxs_sample = (
+                nxs_df
+                .select(resolved_columns)
+                .filter(pl.arange(0, pl.len()).shuffle().over(resolved_columns[0]) < 50)
+                .with_columns([
+                    pl.col(col).map_elements(
+                        lambda x: x.load_on_demand() if isinstance(x, LazyDatasetReference) else x,
+                        return_dtype=pl.Object
+                    )
+                    for col in ref_columns  # Only process confirmed reference columns
+                ])
+                .collect()
+            )    
+            
+            print("Sample data:\n", nxs_sample)
+            
+            
+            
+                        
             # Check if resolving soft links resulted in an empty DataFrame
             if resolved_nxs_df.collect().height == 0:
                 breakpoint()  # or pdb.set_trace()
