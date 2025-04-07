@@ -265,7 +265,7 @@ class FileFilterApp:
     def load_nxs_files(path: str, force_reload: bool = False, resolve: bool = False):
         """Load NeXus files as a lazy dataframe (cached)."""
         processor = NeXusBatchProcessor(path)
-        return processor.get_dataframe(force_reload=force_reload, resolve = resolve)
+        return processor.get_dataframe(force_reload=force_reload)
 
     @staticmethod
     @st.cache_data
