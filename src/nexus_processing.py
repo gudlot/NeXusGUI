@@ -583,7 +583,7 @@ class NeXusBatchProcessor(BaseProcessor):
         # Reprocess files if necessary
         if force_reload or self._df is None:
             self.process_files(force_reload)
-            self._df = self._build_dataframe()
+            self._df = self._build_dataframe()         
 
         return self._df
 
@@ -711,23 +711,23 @@ if __name__ == "__main__":
 
                
         # Initialize the NeXusBatchProcessor with the broken folder path
-        damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/broken/")
-        damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08/test_folder2/")
+        damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08_test_data/broken/")
+        damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08_test_data/test_folder2/")
         
         
         # Get the DataFrame with regular data (processed files)
         df_damaged = damaged_folder.get_dataframe()
+        print(f'df_damaged is {type(df_damaged)}')
+        
         print("DataFrame (df_damaged):")
-        print(type(df_damaged))
-        
-        
-        print(df_damaged.head())
+        df_preview = df_damaged.collect().head(5)
+        print(df_preview)
         
         print(30*"\N{pineapple}")
         
         #col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
         #col_name = '/scan/apd/data'
-        #col_name='/scan/instrument/collection/exp_t01'
+        col_name='/scan/instrument/collection/exp_t01'
         #col_name='/scan/bpm1/attenuator/foilpos'
         #col_name='/scan/bpm1/attenuator/type'
         #col_name='/scan/data/exp_t01'
