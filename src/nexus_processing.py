@@ -713,7 +713,7 @@ if __name__ == "__main__":
         # Initialize the NeXusBatchProcessor with the broken folder path
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08_test_data/broken/")
         damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08_test_data/test_folder2/")
-        
+        damaged_folder = NeXusBatchProcessor("/Users/lotzegud/P08_test_data/healthy2/")
         
         # Get the DataFrame with regular data (processed files)
         df_damaged = damaged_folder.get_dataframe()
@@ -727,7 +727,9 @@ if __name__ == "__main__":
         
         #col_name = "/scan/instrument/amptek/data"  # Column where LazyDatasetReference instances are stored
         #col_name = '/scan/apd/data'
-        col_name='/scan/instrument/collection/exp_t01'
+        #col_name='/scan/instrument/collection/exp_t01'
+        #col_name = '/scan/data/epoch'
+        col_name = '/scan/data/amptek_roi1'
         #col_name='/scan/bpm1/attenuator/foilpos'
         #col_name='/scan/bpm1/attenuator/type'
         #col_name='/scan/data/exp_t01'
