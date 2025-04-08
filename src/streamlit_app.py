@@ -261,16 +261,13 @@ class FileFilterApp:
     #Flexibility: The force_reload parameter allows you to control whether the data 
     # should be reload
     @staticmethod
-    @st.cache_data
+    @st.cache_resource
     def load_nxs_files(path: str, force_reload: bool = False):
         """Load NeXus files as a lazy dataframe (cached)."""
         processor = NeXusBatchProcessor(path)
         df =  processor.get_dataframe(force_reload=force_reload)
         print(type(df))
         
-        df = df.collect()
-        
-        print(type(df))
         
         return df 
         
@@ -350,7 +347,7 @@ class FileFilterApp:
         self.fio_df = self.load_fio_files(st.session_state["current_path"])        
 
         # Initialize the controller with the DataFrames
-        self.controller = DataController(self.nxs_df, self.fio_df)
+        self.controller = DataController(self.nxs_df, self.fio_df, self.nxs_processor, self.fio_processor)
         
         st.write(isinstance(self.nxs_df, pl.LazyFrame))
                      
