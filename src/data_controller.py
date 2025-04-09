@@ -67,17 +67,17 @@ class DataController:
         self.fio_processor = fio_processor  # Single Fio batch processor
                 
         
-    def get_column_names(self, selected_files: list[str]) -> list[str]:
+    def get_column_names(self, selected_files: list[str]) -> dict[str, str]:
         """
-        Returns a list of unique column names from the selected files, preserving order.
+        Returns a dict of unique column names from the selected files, preserving order.
 
         Args:
             selected_files (list[str]): List of selected filenames.
 
         Returns:
-            list[str]: Ordered column names from selected `.nxs` and `.fio` files.
+            dict[str, str]: Ordered unique column names from `.nxs` and `.fio` files.
         """
-        column_names = []
+        column_names = {}
 
         if not selected_files:
             return column_names
@@ -88,10 +88,13 @@ class DataController:
         logger.debug(f"Processing column names for selected files: {selected_files}")
 
         if nxs_selected:
-            column_names.extend(self.nxs_df.collect_schema().names())  
+            for name in self.nxs_df.collect_schema().names():
+                column_names[name] = name
 
         if fio_selected:
-            column_names.extend(col for col in self.fio_df.columns if col not in column_names)  # Avoid duplicates
+            for name in self.fio_df.columns:
+                if name not in column_names:
+                    column_names[name] = name
 
         return column_names
 
