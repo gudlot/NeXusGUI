@@ -260,6 +260,8 @@ class FileFilterApp:
                 
     #Flexibility: The force_reload parameter allows you to control whether the data 
     # should be reload
+    #See for st.cache_resource
+    #https://docs.streamlit.io/develop/concepts/architecture/caching#stcache_resource
     @staticmethod
     @st.cache_resource
     def load_nxs_files(path: str, force_reload: bool = False):
@@ -342,7 +344,6 @@ class FileFilterApp:
         st.title("NeXus-Fio-File Plotting App")
         
         # Load cached data using the standalone functions
-        # Load cached data using the standalone functions
         self.nxs_df = self.load_nxs_files(st.session_state["current_path"])  
         self.fio_df = self.load_fio_files(st.session_state["current_path"])        
 
@@ -394,7 +395,8 @@ class FileFilterApp:
                 self._reset_app(new_path)
             except ValueError as e:
                 st.error(f"Invalid directory: {new_path}. Error: {e}")
-               
+        
+             
         st.text_input("\N{hot pepper} Current Path:", st.session_state.get("current_path", ""), disabled=True)
 
                     
@@ -515,21 +517,16 @@ class FileFilterApp:
         logger.debug(f"NXS files: {len(nxs_files)}")
         logger.debug(f"FIO files: {len(fio_files)}")
 
-
-
-            # Fetch metadata for .nxs files from cached data frame
+        # Fetch metadata for .nxs files from cached data frame
         nxs_metadata = None
         if nxs_files and hasattr(self, "nxs_df"):
-            #nxs_metadata = self.nxs_df.filter(
-            #    pl.col("filename").is_in(nxs_files)
-            #).select(["filename", "scan_id", "scan_command", "human_start_time"]).collect()  # <-- Ensure eager execution
             nxs_metadata = (
                 self.nxs_df
                 .filter(pl.col("filename").is_in(nxs_files))
                 .select(["filename", "scan_id", "scan_command", "human_start_time"])
                 .collect()  # Collect only after filtering to minimize memory usage
             )
-
+        logger.debug(f'nxs_metadata is {type(nxs_metadata)}')
 
         # Fetch metadata for .fio files from cached data frame
         fio_metadata = None
@@ -823,7 +820,7 @@ class FileFilterApp:
             time_options = ["Unix", "Datetime"]  # Display options for time format
 
             # Ensure we don’t modify cached data in place
-            column_names = self.controller.get_column_names(self.selected_files).copy()
+            column_names = self.controller.get_column_names(self.selected_files).copy()          
             column_names.pop(time_column, None)  # Remove time_column safely
 
             if not column_names:
@@ -840,10 +837,10 @@ class FileFilterApp:
                 z = st.selectbox("Select Normalization:", list(column_names.keys()), key="plot_options_z")
 
             with col2:
-                t_radio = st.radio("", ["Use", "Ignore"], key="plot_options_t_radio")
-                x_radio = st.radio("", ["Use", "Ignore"], key="plot_options_x_radio", index=1)
-                y_radio = st.radio("", ["Use", "Ignore"], key="plot_options_y_radio")
-                z_radio = st.radio("", ["Use", "Ignore"], key="plot_options_z_radio", index=1)  # Default to Ignore
+                t_radio = st.radio(" ", ["Use", "Ignore"], key="plot_options_t_radio", label_visibility="hidden")
+                x_radio = st.radio(" ", ["Use", "Ignore"], key="plot_options_x_radio", index=1, label_visibility="hidden")
+                y_radio = st.radio(" ", ["Use", "Ignore"], key="plot_options_y_radio", label_visibility="hidden")
+                z_radio = st.radio(" ", ["Use", "Ignore"], key="plot_options_z_radio", index=1, label_visibility="hidden")  # Default to Ignore
 
             normalize = st.checkbox("Normalize data", value=False, key="plot_options_normalize")
 
