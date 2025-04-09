@@ -22,12 +22,15 @@ __status__ = "Development"
 
 import numpy as np
 import polars as pl
+
+from collections.abc import Iterable
+
 import logging
 from nexus_processing import NeXusBatchProcessor
 from fio_processing import FioBatchProcessor
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List
+from typing import List, Any
 from lazy_dataset import LazyDatasetReference
 
 
@@ -213,14 +216,15 @@ class DataController:
             )
                             
                 
-            print("Sample data:\n", nxs_sample)
-            # Show values of first row for all resolved columns
-            try:
-                first_row = nxs_sample.select(resolved_columns).row(0)
-                for col, val in zip(resolved_columns, first_row):
-                    print(f"{col}: {val} (type: {type(val)})")
-            except Exception as e:
-                logger.warning(f"Could not retrieve first row: {e}")
+            #print("Sample data:\n", nxs_sample)
+            ## Show values of first row for all resolved columns
+            #try:
+            #    first_row = nxs_sample.select(resolved_columns).row(0)
+            #    for col, val in zip(resolved_columns, first_row):
+            #        print(f"{col}: {val} (type: {type(val)})")
+            #except Exception as e:
+            #    logger.warning(f"Could not retrieve first row: {e}")
+            #
                     
             # Collect metadata
             self.column_metadata = self._analyze_column_metadata(nxs_sample)
@@ -236,115 +240,172 @@ class DataController:
 
         # Process .fio files (eager)
         if fio_files:
-            # No need to resolve soft links for .fio files
+            available_columns = [col for col in columns if col in self.fio_df.columns]
+
             fio_data = (
                 self.fio_df
-                .filter(pl.col("filename").is_in(fio_files))  # Filter selected files
-                .select(columns)  # Select required columns
-                .sort("scan_id")  # Sort by scan_id
+                .select(available_columns)  # Select only available columns
+                .sort("scan_id")            # Sort by scan_id
             )
 
         # Combine results (both eager DataFrames)
         if nxs_data is not None and fio_data is not None:
+            # Ensure both frames have the same columns before concatenating
+            nxs_data = self.nxs_df.sort("scan_id").select(resolved_columns)
+            # Concatenate the nxs_data and fio_data, ensuring both are compatible LazyFrames
             combined_data = pl.concat([nxs_data, fio_data])
         elif nxs_data is not None:
+            # Just process nxs_data
             combined_data = self.nxs_df.sort("scan_id").select(resolved_columns)
         elif fio_data is not None:
+            # Just process fio_data
             combined_data = fio_data
         else:
-            combined_data =  pl.DataFrame().lazy() #empty generic pl.LazyFrame
+            # If neither data is available, return an empty LazyFrame
+            combined_data = pl.DataFrame().lazy()
 
             
 
         print("DataFrame combined_data Structure:")
         print(combined_data.head())  # Print the first few rows of the DataFrame
         print("\nDataFrame Columns:")
-        print(combined_data.columns)  # Check the columns
+        print(combined_data.collect_schema().names())  # Check the columns
         print("\nDataFrame Types:")
-        print(combined_data.dtypes)  # Check data types of the columns
+        print(combined_data.collect_schema().dtypes())  # Check data types of the columns
 
         return combined_data
     
-    
     def _analyze_column_metadata(self, sample_df: pl.DataFrame) -> dict:
         """
-        Analyze column metadata by inspecting both column dtypes and actual cell contents.
-        
+        Analyze column metadata using Polars' type system and actual cell contents.
+
         Returns:
             dict: Nested dictionary with structure {col_name: {metadata_dict}}
         """
         column_metadata = {}
         
         for col in sample_df.columns:
-            # Get first 5 non-null values
+            # Get sample values and first non-null value
             non_null = sample_df[col].drop_nulls()
             sample_values = non_null.head(5).to_list()
-            first_value = sample_values[0] if sample_values else None
-            
-            # Get both Polars dtype and actual cell type
-            col_dtype = sample_df.schema[col]
-            cell_dtype = type(first_value).__name__ if first_value else 'null'
-            
-            # Initialize metadata
-            col_meta = {
-                # Column-level typing
-                'col_dtype': str(col_dtype),
-                'col_is_numeric': col_dtype in (pl.Int64, pl.Float64, pl.UInt64),
-                'col_is_temporal': col_dtype in (pl.Date, pl.Datetime, pl.Time),
+            # Ensure sample_values is a valid iterable and non-empty
+            if isinstance(sample_values, (list, np.ndarray)) and len(sample_values) > 0:
+                first_value = sample_values[0]
+            elif isinstance(sample_values, Iterable) and len(sample_values) > 0:
+                # Handle iterable types, not just list and ndarray
+                first_value = sample_values[0]
+            else:
+                first_value = None
                 
-                # Cell-level typing
-                'cell_dtype': cell_dtype,
-                'cell_is_numeric': False,  # Will update below
+            
+            # Get dtype information using Polars' type system
+            col_dtype = sample_df.schema[col]
+            
+            # Initialize base metadata
+            col_meta = {
+                'col_dtype': str(col_dtype),
+                'col_is_numeric': col_dtype.is_numeric(),
+                'col_is_integer': col_dtype.is_integer(),
+                'col_is_float': col_dtype.is_float(),
+                'col_is_temporal': col_dtype.is_temporal(),
+                'col_is_string': col_dtype == pl.datatypes.Utf8,  # Checking if the column type is Utf8 (String)
+                'col_is_list': isinstance(col_dtype, pl.datatypes.List),  # Checking if column type is List
+                'col_is_bool': col_dtype == pl.datatypes.Boolean,  # Checking if the column type is Boolean
+                'col_is_null': col_dtype == pl.datatypes.Null,  # Checking if the column type is Null
+                'col_is_object': isinstance(col_dtype, pl.datatypes.Object),  # Checking if column type is Object
+                'col_is_signed_integer': col_dtype == col_dtype.is_signed_integer(),
+                'col_is_unsigned_integer': col_dtype == col_dtype.is_unsigned_integer(),
+                'col_is_decimal': col_dtype.is_decimal(),  # Check for Decimal type
+                'col_is_nested': col_dtype.is_nested(),    # Check for nested types (Struct)
+                'cell_dtype': 'null', 
+                'cell_is_numeric': False,
                 'cell_is_array': False,
                 'cell_shape': None,
                 'cell_ndim': 0,
-                
-                # Statistics
                 'null_count': sample_df[col].null_count(),
-                'unique_count': sample_df[col].n_unique(),
+                'cell_has_size': False,
                 'sample_values': sample_values
             }
-            
-            # Detailed cell type analysis
+
+            # Handle List-type columns
+            if isinstance(col_dtype, pl.datatypes.List):
+                col_meta['col_is_list'] = True
+                col_meta['cell_dtype'] = list
+                # Check if the first element in the list is a list and analyze it
+                if sample_values:
+                    first_list_value = sample_values[0]
+                    if isinstance(first_list_value, list):
+                        # Optionally, track the shape of the list if needed
+                        col_meta['cell_shape'] = (len(first_list_value),)  # Example of list shape
+                        col_meta['cell_ndim'] = 1  # Lists are one-dimensional in Polars context
+                        col_meta['cell_is_array'] = True
+                        # You could also compute statistics on the lists if necessary
+
+
+            # Handle other column types, including Object and ndarray handling
+            elif isinstance(col_dtype, pl.datatypes.Object):
+                if isinstance(first_value, np.ndarray):
+                    col_meta['cell_has_size'] = True
+                    col_meta['cell_dtype'] = np.ndarray
+                    col_meta['cell_is_array'] = True
+                    col_meta['cell_shape'] = first_value.shape
+                    col_meta['cell_ndim'] = first_value.ndim
+                   
+            else:
+                col_meta['unique_count'] = sample_df[col].n_unique()
+
+            # Analyze first value if exists
             if first_value is not None:
-                # Handle numpy arrays
-                if 'numpy.ndarray' in str(type(first_value)):
-                    col_meta.update({
-                        'cell_is_array': True,
-                        'cell_shape': first_value.shape,
-                        'cell_ndim': first_value.ndim,
-                        'cell_dtype': str(first_value.dtype),
-                        'cell_is_numeric': np.issubdtype(first_value.dtype, np.number)
-                    })
-                
-                # Handle LazyDatasetReference
-                elif isinstance(first_value, LazyDatasetReference):
-                    try:
-                        loaded = first_value.load_on_demand()
-                        col_meta.update({
-                            'cell_is_array': True,
-                            'cell_shape': getattr(loaded, 'shape', None),
-                            'cell_ndim': getattr(loaded, 'ndim', None),
-                            'cell_dtype': str(getattr(loaded, 'dtype', 'unknown')),
-                            'cell_is_numeric': hasattr(loaded, 'dtype') and np.issubdtype(loaded.dtype, np.number)
-                        })
-                    except Exception as e:
-                        logger.warning(f"Failed to load reference for {col}: {e}")
-                
-                # Handle Python scalars
-                else:
-                    col_meta['cell_is_numeric'] = isinstance(first_value, (int, float, np.number))
-            
-            # Special handling for string columns that might contain numbers
-            if col_dtype == pl.Utf8 and col_meta['cell_dtype'] == 'str':
-                if sample_values and all(v.replace('.','',1).isdigit() for v in sample_values if v):
-                    col_meta['cell_dtype'] = 'numeric_string'
-                    col_meta['cell_is_numeric'] = True
+                self._analyze_cell_value(first_value, col_meta)
+
+            # Handle string columns
+            if col_meta['col_is_string']:
+                self._analyze_string_value(sample_values, col_meta)
             
             column_metadata[col] = col_meta
-        
+
         return column_metadata
-                
+
+
+    def _analyze_cell_value(self, value: Any, meta: dict) -> None:
+        """Analyze individual cell value and update metadata."""
+        # Handle numpy arrays
+        if isinstance(value, np.ndarray):
+            meta.update({
+                'cell_is_array': True,
+                'cell_shape': value.shape,
+                'cell_ndim': value.ndim,
+                'cell_dtype': str(value.dtype),
+                'cell_is_numeric': np.issubdtype(value.dtype, np.number)
+            })
+        # Handle LazyDatasetReference
+        elif isinstance(value, LazyDatasetReference):
+            try:
+                loaded = value.load_on_demand()
+                meta.update({
+                    'cell_is_array': True,
+                    'cell_shape': getattr(loaded, 'shape', None),
+                    'cell_ndim': getattr(loaded, 'ndim', None),
+                    'cell_dtype': str(getattr(loaded, 'dtype', 'unknown')),
+                    'cell_is_numeric': hasattr(loaded, 'dtype') and np.issubdtype(loaded.dtype, np.number)
+                })
+            except Exception as e:
+                logger.warning(f"Failed to load reference: {e}")
+        # Handle Python scalars
+        else:
+            meta['cell_is_numeric'] = isinstance(value, (int, float, np.number))
+
+    def _analyze_string_value(self, sample_values: list, meta: dict) -> None:
+        """Simply check if values are strings and update metadata."""
+        if not sample_values:
+            return
+        
+        if isinstance(sample_values[0] , str):
+            meta.update({
+                'cell_dtype': 'str',  # It's a string
+                'cell_is_numeric': False,  # It's not numeric
+            })
+            
 
     def _resolve_nested_lazy_datasets(self, lazy_frame: pl.LazyFrame) -> pl.LazyFrame:
         """Resolve nested LazyDatasets in the given LazyFrame."""
@@ -367,7 +428,6 @@ class DataController:
         
         # Create a new eager DataFrame with the resolved columns
         return eager_frame.select(resolved_columns)
-
 
 
 
