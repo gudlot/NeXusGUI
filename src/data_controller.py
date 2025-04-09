@@ -138,6 +138,7 @@ class DataController:
         nxs_data = None
         fio_data = None
 
+        #TODO: Think about the design of columns, instead of list a dict?
         columns = []
 
         # Always start with 'filename'
