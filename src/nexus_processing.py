@@ -559,7 +559,7 @@ class NeXusBatchProcessor(BaseProcessor):
             # Validate the resulting LazyFrame
             logger.debug("\N{red apple}" * 10)
             logger.debug(f"LazyFrame created: {type(self._df)}")
-            logger.debug(f"Schema: {self._df.collect_schema()}")
+            #logger.debug(f"Schema: {self._df.collect_schema()}")
             logger.debug(f"Optimized plan:\n{self._df.explain(optimized=True)}")
             logger.debug("\N{red apple}" * 10)
 
