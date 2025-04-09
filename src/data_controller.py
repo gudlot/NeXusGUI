@@ -135,23 +135,25 @@ class DataController:
         nxs_data = None
         fio_data = None
 
-        columns = ["scan_id", x_column, y_column]
-        if z_column:
-            columns.append(z_column)
+        columns = []
 
-        # If any of x_column, y_column, or z_column (if provided) are not "filename", add "filename" to the list
-        if "filename" not in {x_column, y_column} and (not z_column or z_column != "filename"):
-            columns.insert(0, "filename")  # Ensures "filename" appears first
+        # Always start with 'filename'
+        if "filename" not in {x_column, y_column, z_column}:
+            columns.append("filename")
+
+        # Collect the rest, preserving order and avoiding duplication
+        for col in ("scan_id", x_column, y_column, z_column):
+            if col and col not in columns:
+                columns.append(col)
 
             
         # Process .nxs files (lazy)
         if nxs_files:
 
             # Resolve soft links for all selected columns
-            
-            resolved_columns = self._resolve_soft_links(self.nxs_df, columns)
+        
             logger.debug(f"Before resolving soft links: {columns}")
-            logger.debug(f"After resolving soft links: {resolved_columns}")
+         
             
             # 1. Get resolved columns
             resolved_columns = self._resolve_soft_links(self.nxs_df, columns)
@@ -162,7 +164,7 @@ class DataController:
             detection_rows = 5
 
             combined_sample = (
-                nxs_df
+                self.nxs_df
                 .select(resolved_columns)
                 .with_row_count()
                 .filter(
@@ -212,20 +214,25 @@ class DataController:
                             
                 
             print("Sample data:\n", nxs_sample)
-            value = nxs_sample.select(pl.col('/scan/apd/data')).row(0)[0]
-            print(value)
-            print(type(value))
+            # Show values of first row for all resolved columns
+            try:
+                first_row = nxs_sample.select(resolved_columns).row(0)
+                for col, val in zip(resolved_columns, first_row):
+                    print(f"{col}: {val} (type: {type(val)})")
+            except Exception as e:
+                logger.warning(f"Could not retrieve first row: {e}")
+                    
+            # Collect metadata
+            self.column_metadata = self._analyze_column_metadata(nxs_sample)
             
-
-         
-         
-            
-            logger.debug(10*"\N{strawberry}")
-            logger.debug(resolved_nxs_df)
-
-            logger.debug(10*"\N{strawberry}")
-
-           
+            # Log metadata summary
+            logger.info("Column Metadata Summary:")
+            for col, meta in self.column_metadata.items():
+                type_info = f"{meta['col_dtype']} (cell: {meta['cell_dtype']})"
+                shape_info = f", shape={meta['cell_shape']}" if meta['cell_shape'] else ""
+                logger.info(f"- {col:20s}: {type_info}{shape_info}")
+                        
+                        
 
         # Process .fio files (eager)
         if fio_files:
@@ -241,11 +248,11 @@ class DataController:
         if nxs_data is not None and fio_data is not None:
             combined_data = pl.concat([nxs_data, fio_data])
         elif nxs_data is not None:
-            combined_data = nxs_data
+            combined_data = self.nxs_df.sort("scan_id").select(resolved_columns)
         elif fio_data is not None:
             combined_data = fio_data
         else:
-            ombined_data = pl.DataFrame()  # Return an empty DataFrame if no data is found
+            combined_data =  pl.DataFrame().lazy() #empty generic pl.LazyFrame
 
             
 
@@ -257,6 +264,86 @@ class DataController:
         print(combined_data.dtypes)  # Check data types of the columns
 
         return combined_data
+    
+    
+    def _analyze_column_metadata(self, sample_df: pl.DataFrame) -> dict:
+        """
+        Analyze column metadata by inspecting both column dtypes and actual cell contents.
+        
+        Returns:
+            dict: Nested dictionary with structure {col_name: {metadata_dict}}
+        """
+        column_metadata = {}
+        
+        for col in sample_df.columns:
+            # Get first 5 non-null values
+            non_null = sample_df[col].drop_nulls()
+            sample_values = non_null.head(5).to_list()
+            first_value = sample_values[0] if sample_values else None
+            
+            # Get both Polars dtype and actual cell type
+            col_dtype = sample_df.schema[col]
+            cell_dtype = type(first_value).__name__ if first_value else 'null'
+            
+            # Initialize metadata
+            col_meta = {
+                # Column-level typing
+                'col_dtype': str(col_dtype),
+                'col_is_numeric': col_dtype in (pl.Int64, pl.Float64, pl.UInt64),
+                'col_is_temporal': col_dtype in (pl.Date, pl.Datetime, pl.Time),
+                
+                # Cell-level typing
+                'cell_dtype': cell_dtype,
+                'cell_is_numeric': False,  # Will update below
+                'cell_is_array': False,
+                'cell_shape': None,
+                'cell_ndim': 0,
+                
+                # Statistics
+                'null_count': sample_df[col].null_count(),
+                'unique_count': sample_df[col].n_unique(),
+                'sample_values': sample_values
+            }
+            
+            # Detailed cell type analysis
+            if first_value is not None:
+                # Handle numpy arrays
+                if 'numpy.ndarray' in str(type(first_value)):
+                    col_meta.update({
+                        'cell_is_array': True,
+                        'cell_shape': first_value.shape,
+                        'cell_ndim': first_value.ndim,
+                        'cell_dtype': str(first_value.dtype),
+                        'cell_is_numeric': np.issubdtype(first_value.dtype, np.number)
+                    })
+                
+                # Handle LazyDatasetReference
+                elif isinstance(first_value, LazyDatasetReference):
+                    try:
+                        loaded = first_value.load_on_demand()
+                        col_meta.update({
+                            'cell_is_array': True,
+                            'cell_shape': getattr(loaded, 'shape', None),
+                            'cell_ndim': getattr(loaded, 'ndim', None),
+                            'cell_dtype': str(getattr(loaded, 'dtype', 'unknown')),
+                            'cell_is_numeric': hasattr(loaded, 'dtype') and np.issubdtype(loaded.dtype, np.number)
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to load reference for {col}: {e}")
+                
+                # Handle Python scalars
+                else:
+                    col_meta['cell_is_numeric'] = isinstance(first_value, (int, float, np.number))
+            
+            # Special handling for string columns that might contain numbers
+            if col_dtype == pl.Utf8 and col_meta['cell_dtype'] == 'str':
+                if sample_values and all(v.replace('.','',1).isdigit() for v in sample_values if v):
+                    col_meta['cell_dtype'] = 'numeric_string'
+                    col_meta['cell_is_numeric'] = True
+            
+            column_metadata[col] = col_meta
+        
+        return column_metadata
                 
 
     def _resolve_nested_lazy_datasets(self, lazy_frame: pl.LazyFrame) -> pl.LazyFrame:
