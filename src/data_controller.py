@@ -15,8 +15,9 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with NeXusGUI. If not, see <https://www.gnu.org/licenses/>.
 
-__author__ = "Gudrun Lotze"
-__copyright__ = "Copyright 2025"
+__author__ = "Gudrun Lotze
+__copyright__ = "Deutsches Elektronen-Synchrotron DESY, Hamburg, Germany"
+__date__ = "25/04/2025"
 __license__ = "AGPL-3.0"
 __status__ = "Development"
 
