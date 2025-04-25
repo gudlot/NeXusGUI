@@ -1,5 +1,5 @@
 # NeXusGUI – A GUI for visualising data across multiple NeXus files.
-# Copyright (C) 2025 Gudrun Lotze
+# Copyright (C) 2025 Deutsches Elektronen-Synchrotron DESY
 # This file is part of NeXusGUI.
 #
 # NeXusGUI is free software: you can redistribute it and/or modify
@@ -16,7 +16,8 @@
 # along with NeXusGUI. If not, see <https://www.gnu.org/licenses/>.
 
 __author__ = "Gudrun Lotze"
-__copyright__ = "Copyright 2025"
+__copyright__ = "Deutsches Elektronen-Synchrotron DESY, Hamburg, Germany"
+__date__ = "25/04/2025"
 __license__ = "AGPL-3.0"
 __status__ = "Development"
 
