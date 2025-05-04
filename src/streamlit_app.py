@@ -1015,5 +1015,5 @@ class FileFilterApp:
  
 
 if __name__ == "__main__":
-    app = FileFilterApp(default_path="/Users/lotzegud/P08_test_data/healthy2")
+    app = FileFilterApp(default_path="/Volumes/Titan/lotzegud/P08_test_data/healthy2")
     app.run()
